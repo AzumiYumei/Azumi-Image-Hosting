@@ -1,4 +1,3 @@
-# syntax=docker/dockerfile:1
 # Azumi Image Host 容器镜像构建文件
 # 说明：用于在Docker中运行服务，默认暴露8080端口；数据与备份目录通过挂载到容器。
 
