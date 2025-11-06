@@ -4,7 +4,7 @@
 // 文件名称: Config.js
 // 作者: AzumiYumeichi
 // 创建日期: 2025-11-06
-// 版本: 1.0
+// 版本: 1.1
 // 
 // 描述: 应用的配置中心，负责统一管理端口、JWT密钥、数据目录、
 //       上传目录、备份目录以及数据库文件路径。初始化时自动创建
@@ -12,6 +12,7 @@
 // 
 // 修改历史:
 // 2025-11-06 - 初始版本
+// 2025-11-06 - 默认端口改为3000
 // ================================================================
 const fs = require('fs');
 const path = require('path');
@@ -21,7 +22,7 @@ class Config {
    * 构造函数：初始化配置并创建必要的目录结构
    */
   constructor() {
-    /** @type {number} */ this.m_Port = parseInt(process.env.PORT || '8080', 10);
+    /** @type {number} */ this.m_Port = parseInt(process.env.PORT || '3000', 10);
     /** @type {string} */ this.m_AdminPassword = process.env.ADMIN_PASSWORD || '';
     /** @type {string} */ this.m_AdminUsername = process.env.ADMIN_USERNAME || 'admin';
     /** @type {string} */ this.m_JwtSecret = process.env.JWT_SECRET || 'azumi-image-host-secret';

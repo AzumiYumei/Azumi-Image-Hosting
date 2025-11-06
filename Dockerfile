@@ -1,5 +1,5 @@
 # Azumi Image Host 容器镜像构建文件
-# 说明：用于在Docker中运行服务，默认暴露8080端口；数据与备份目录通过挂载到容器。
+# 说明：用于在Docker中运行服务，默认暴露3000端口；数据与备份目录通过挂载到容器。
 
 FROM node:20
 WORKDIR /app
@@ -25,8 +25,8 @@ COPY src ./src
 RUN mkdir -p /app/data/uploads && mkdir -p /app/backups
 
 ENV NODE_ENV=production
-ENV PORT=8080
+ENV PORT=3000
 # ADMIN_USERNAME/ADMIN_PASSWORD/JWT_SECRET 由运行时传入
 
-EXPOSE 8080
+EXPOSE 3000
 CMD ["node", "src/app/server.js"]
