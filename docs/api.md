@@ -1,6 +1,6 @@
 # API 文档
 
-所有返回均为 JSON，除原图获取接口。需要认证的接口使用 `Authorization: Bearer <token>`。
+除图片获取接口外，其余返回均为 JSON。图片获取接口仅返回单张图片的二进制，并保留原始文件名与格式。需要认证的接口使用 `Authorization: Bearer <token>`。
 
 ## 认证
 - `POST /api/auth/register`
@@ -35,16 +35,6 @@
       -F 'tags=avatar' \
       -F 'tags=test'
     ```
-- `POST /api/images/upload-folder`（需认证）
-  - form-data: `folderZip` 单文件（将本地文件夹压缩成zip后上传）, 可选 `tags`
-  - 返回: `{ created: [{ id }, ...] }`
-  - curl 示例：
-    ```
-    curl -X POST http://<HOST>:<PORT>/api/images/upload-folder \
-      -H 'Authorization: Bearer <TOKEN>' \
-      -F 'folderZip=@folder.zip' \
-      -F 'tags=album'
-    ```
 - `POST /api/images/upload-url`（需认证）
   - body: `{ urls: ["http://...","..."], tags: ["tag1","tag2"] }`
   - 返回: `{ created: [{ id } | { error }, ...] }`
@@ -56,17 +46,17 @@
       -d '{"urls":["https://example.com/a.png","https://example.com/b.jpg"],"tags":["code","js"]}'
     ```
 - `GET /api/images`
-  - 查询参数：`tags=tag1,tag2`（可选）、`random=true|false`、`count=1..100`
-  - 返回: `{ images: [...] }`
-  - curl 示例：
+  - 查询参数：`tags=tag1,tag2`（可选）、`random=true|false`
+  - 返回: 单张图片二进制（保留原始文件名与格式）
+  - curl 示例（随机获取并按原名保存）：
     ```
-    curl "http://<HOST>:<PORT>/api/images?tags=avatar,test&random=true&count=3"
+    curl -OJ "http://<HOST>:<PORT>/api/images?tags=avatar,test&random=true"
     ```
 - `GET /api/images/:id/raw`
-  - 返回图片二进制（浏览器或图片查看器直接显示）
-  - curl 示例（保存到本地）：
+  - 返回图片二进制（浏览器或图片查看器直接显示），保留原始文件名与格式
+  - curl 示例（按服务器提供的原始文件名保存到本地）：
     ```
-    curl -i "http://<HOST>:<PORT>/api/images/123/raw" -o image.png
+    curl -OJ "http://<HOST>:<PORT>/api/images/123/raw"
     ```
 - `DELETE /api/images/:id`（需认证）
   - 普通用户只能删除自己的图片；管理员可删除任意图片

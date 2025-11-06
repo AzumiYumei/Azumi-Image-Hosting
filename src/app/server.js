@@ -56,7 +56,6 @@ async function Bootstrap() {
 
   // ------------------ 图片上传与管理 ------------------
   app.post('/api/images/upload', AuthMiddleware.VerifyToken, upload.array('files', 50), ImageController.UploadLocal);
-  app.post('/api/images/upload-folder', AuthMiddleware.VerifyToken, upload.single('folderZip'), ImageController.UploadZipFolder);
   app.post('/api/images/upload-url', AuthMiddleware.VerifyToken, ImageController.UploadByUrl);
 
   app.get('/api/images', ImageController.GetImages); // 获取图片列表或随机
