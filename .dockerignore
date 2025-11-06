@@ -1,0 +1,17 @@
+# 排除不必要的内容，减小构建上下文
+node_modules
+npm-debug.log*
+Dockerfile
+.dockerignore
+.git
+.gitignore
+.env
+backups
+data
+.tmp
+*.tmp
+*.log
+*.sqlite
+
+# 示例临时文件
+/tmp.png

@@ -1,0 +1,27 @@
+# Azumi Image Host docker-compose 配置
+# 用法：
+# 1) 在项目根创建 .env（见部署文档示例）
+# 2) 构建并后台启动：
+#    docker compose up -d --build
+# 3) 查看日志：
+#    docker compose logs -f
+
+version: "3.8"
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: azumi-image-host:latest
+    container_name: azumi-image-host
+    env_file:
+      - .env
+    environment:
+      - PORT=${PORT:-8080}
+      # 可选：在 .env 中设置 ADMIN_USERNAME/ADMIN_PASSWORD/JWT_SECRET
+    ports:
+      - "${PORT:-8080}:8080"
+    volumes:
+      - ./data:/app/data
+      - ./backups:/app/backups
+    restart: unless-stopped
