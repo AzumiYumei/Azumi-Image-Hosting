@@ -219,7 +219,13 @@ docker compose version
 1) 在项目根创建 `.env`（用于注入环境变量）
 ```
 tee .env >/dev/null <<'EOF'
-PORT=8080
+# 容器内部应用端口（保持默认 8080，通常不需要改动）
+APP_PORT=8080
+# 宿主机对外绑定 IP（默认 0.0.0.0；如需仅本机访问，改为 127.0.0.1）
+HOST_IP=0.0.0.0
+# 宿主机对外端口（默认 3000）
+HOST_PORT=3000
+
 ADMIN_USERNAME=azumi-admin
 ADMIN_PASSWORD=请替换为强密码
 JWT_SECRET=请替换为强随机密钥
@@ -255,16 +261,16 @@ docker compose ps
 
 4) 验证服务
 ```
-curl -s http://127.0.0.1:8080/ -I
+curl -s http://127.0.0.1:3000/ -I
 ```
 
 5) 验证管理员登录（示例）
 ```
-TOKEN=$(curl -s -X POST http://127.0.0.1:8080/api/auth/login \
+TOKEN=$(curl -s -X POST http://127.0.0.1:3000/api/auth/login \
   -H 'Content-Type: application/json' \
   -d '{"username":"azumi-admin","password":"你的强密码"}' | jq -r .token)
 
-curl -s -H "Authorization: Bearer $TOKEN" http://127.0.0.1:8080/api/users | jq
+curl -s -H "Authorization: Bearer $TOKEN" http://127.0.0.1:3000/api/users | jq
 ```
 
 ## 目录与持久化
@@ -291,9 +297,19 @@ docker compose up -d
 - 生产环境建议容器仅暴露到内网（例如宿主映射到 `127.0.0.1:8080`），对外通过 Nginx 暴露域名与 HTTPS。
 - Nginx 配置参考前文“反向代理与 HTTPS”。
 
+## 端口与IP设置（Docker）
+- 宿主机对外端口与IP通过 `.env` 控制：
+  - `HOST_IP`：绑定的宿主机 IP（默认 `0.0.0.0`，表示所有网卡；若仅本机访问，设为 `127.0.0.1`）
+  - `HOST_PORT`：对外端口（默认 `3000`）
+  - `APP_PORT`：容器内应用监听端口（默认 `8080`，与 Node 应用一致）
+- 端口映射关系：`HOST_IP:HOST_PORT -> 容器 APP_PORT`。例如：
+  - 对外开放：`HOST_IP=0.0.0.0`, `HOST_PORT=3000`, `APP_PORT=8080` → 外部访问 `http://<服务器IP>:3000/`
+  - 仅本机访问：`HOST_IP=127.0.0.1`, `HOST_PORT=3000`, `APP_PORT=8080` → 仅宿主访问 `http://127.0.0.1:3000/`
+- 如需更改对外端口，修改 `.env` 的 `HOST_PORT` 并重新 `docker compose up -d`。
+
 ## 注意事项
 - 管理员种子：仅当设置了 `ADMIN_PASSWORD` 且 `ADMIN_USERNAME` 在数据库中不存在时创建；不会覆盖已存在管理员密码。
-- 端口占用：若宿主 `8080` 已被占用，修改 `.env` 的 `PORT` 并重新 `docker compose up -d`。
+- 端口占用：若宿主端口已被占用，修改 `.env` 的 `HOST_PORT` 并重新 `docker compose up -d`。
 - 权限：确保宿主机 `./data` 与 `./backups` 对当前用户可读写。
 
 本应用为轻量化图床（JS/Node.js + SQLite），数据与图片存放在 `data/` 与 `backups/` 目录下，这些目录已通过 `.gitignore` 忽略，任何 git 操作均不会删除或覆盖其中的数据。
