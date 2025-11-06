@@ -208,6 +208,7 @@ sudo systemctl restart azumi-image-host
 ```
 sudo apt update
 sudo apt install -y docker.io
+sudo systemctl enable --now docker
 sudo usermod -aG docker $USER
 newgrp docker
 docker --version
@@ -230,11 +231,27 @@ EOF
 docker compose up -d --build
 ```
 
+若出现警告 `the attribute version is obsolete`：
+- 说明：Compose v2 不再使用 `version` 字段；该字段将被忽略。
+- 处理：已在仓库中移除 `version` 字段，更新到最新 `docker-compose.yml` 即可。
+
 3) 查看日志与状态
 ```
 docker compose logs -f
 docker compose ps
 ```
+
+如报错 `Cannot connect to the Docker daemon at unix:///var/run/docker.sock`：
+- 确认 Docker 服务已启动：
+  - `sudo systemctl status docker`
+  - 如未运行：`sudo systemctl start docker` 或 `sudo systemctl enable --now docker`
+- 当前用户加入 `docker` 组并重新登录：
+  - `sudo usermod -aG docker $USER && newgrp docker`
+- WSL(Ubuntu) 场景：需启用 systemd 或手动启动：
+  - 在 `/etc/wsl.conf` 中配置：
+    - `[boot]`
+    - `systemd=true`
+  - 在 Windows 执行 `wsl --shutdown` 后重开子系统；或临时运行 `sudo service docker start`。
 
 4) 验证服务
 ```

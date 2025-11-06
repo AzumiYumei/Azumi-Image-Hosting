@@ -6,7 +6,6 @@
 # 3) 查看日志：
 #    docker compose logs -f
 
-version: "3.8"
 services:
   app:
     build:
