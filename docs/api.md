@@ -32,8 +32,18 @@
       -H 'Authorization: Bearer <TOKEN>' \
       -F 'files=@local1.png' \
       -F 'files=@local2.jpg' \
-      -F 'tags=avatar' \
-      -F 'tags=test'
+      -F 'tags=avatar;type=text/plain;charset=UTF-8' \
+      -F 'tags=test;type=text/plain;charset=UTF-8'
+
+    # 说明：
+    # - 服务端会自动尝试将标签规范化为 UTF-8，并修复常见乱码（例如未设置控制台为 UTF-8 导致出现 "Ã" 等伪字节）。
+    # - 在 Windows 的 CMD 建议先执行 chcp 65001，再运行上述命令；PowerShell 默认更友好但也建议显式 charset。
+    # - 压缩行为：当图片超过 256KB 时，服务端将自动压缩到不超过 256KB，且保留原格式与扩展名；可能降低质量或按比例缩放分辨率（最低宽度 64 像素）。
+    #   - JPEG：逐步降低质量（mozjpeg），必要时缩放。
+    #   - PNG：启用调色板并提高压缩级别。
+    #   - WebP/TIFF：降低质量或采用 JPEG 压缩（TIFF）。
+    #   - GIF：尝试缩放以减小体积，动画质量不保证。
+    #   - BMP：不进行压缩，保留原文件。
     ```
 - `POST /api/images/upload-url`（需认证）
   - body: `{ urls: ["http://...","..."], tags: ["tag1","tag2"] }`

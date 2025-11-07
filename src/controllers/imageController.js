@@ -4,7 +4,7 @@
 // 文件名称: ImageController.js
 // 作者: AzumiYumeichi
 // 创建日期: 2025-11-06
-// 版本: 1.5
+// 版本: 1.8
 // 
 // 描述: 提供图片上传（本地/URL）、删除、检索（标签与随机）、以及原图获取的API。
 // 
@@ -15,10 +15,13 @@
 // 2025-11-06 - 修正 URL 上传的扩展名推断与返回文件名构造，避免后缀丢失
 // 2025-11-06 - 随机与标签检索过滤失联文件；缺失文件 404 返回 text/plain
 // 2025-11-06 - 缺失文件检测时自动删除图片记录；随机获取循环重试直到合法图片或无图
+// 2025-11-07 - 标签自动 UTF-8 规范化与乱码兼容修复（Latin-1 → UTF-8 回退）
+// 2025-11-07 - 上传图片超过 256KB 时自动压缩至不超过 256KB（保留原格式）
 // ================================================================
 const fs = require('fs');
 const path = require('path');
 const axios = require('axios');
+const sharp = require('sharp');
 const { v4: uuidv4 } = require('uuid');
 const { TagRepository } = require('../repositories/tagRepository');
 const { ImageRepository } = require('../repositories/imageRepository');
@@ -85,6 +88,170 @@ class ImageController {
   }
 
   /**
+   * 方法：尝试修复常见的 UTF-8 乱码（Latin-1 → UTF-8 回退）
+   * 说明：当客户端未显式声明 charset 或控制台非 UTF-8（如 Windows 未 chcp 65001）
+   *      导致中文出现 "Ã"、"Â" 等伪字节时，尝试将字符串视作 Latin-1 字节序列并按 UTF-8 解码。
+   * 用法：const fixed = ImageController.FixUtf8Mojibake(tag);
+   */
+  static FixUtf8Mojibake(text) {
+    try {
+      const s = String(text || '');
+      const trial = Buffer.from(s, 'latin1').toString('utf8');
+      const baseScore = ImageController.ScoreString(s);
+      const trialScore = ImageController.ScoreString(trial);
+      return trialScore > baseScore ? trial : s;
+    } catch (_) {
+      return String(text || '');
+    }
+  }
+
+  /** 方法：对字符串进行简单评分，用于判断修复后是否更优（更多 CJK，较少伪字节） */
+  static ScoreString(text) {
+    const s = String(text || '');
+    const cjk = (s.match(/[\u4e00-\u9fa5]/g) || []).length;
+    const mojibake = (s.match(/[ÃÂæçè]/g) || []).length;
+    return (cjk * 2) - mojibake;
+  }
+
+  /**
+   * 方法：规范化标签数组为 UTF-8（去除空白、兼容全角逗号、NFC 归一化、去重）
+   * 说明：支持传入字符串或字符串数组；若某元素含多个标签（逗号/全角逗号分隔），会拆分。
+   * 用法：const tags = ImageController.NormalizeTagsUtf8(rawTags);
+   */
+  static NormalizeTagsUtf8(rawTags) {
+    const list = [];
+    const parts = Array.isArray(rawTags) ? rawTags : (rawTags != null ? [rawTags] : []);
+    for (const t of parts) {
+      const s = String(t || '');
+      const segs = s.split(/[\,\uFF0C]/).map((x) => x.trim()).filter(Boolean);
+      for (let seg of segs) {
+        // 乱码回退修复 + Unicode 规范化
+        seg = ImageController.FixUtf8Mojibake(seg).normalize('NFC');
+        if (seg.length > 0) list.push(seg);
+      }
+    }
+    // 去重（保持原始大小写与顺序，首见优先）
+    const seen = new Set();
+    const dedup = [];
+    for (const item of list) {
+      if (!seen.has(item)) { seen.add(item); dedup.push(item); }
+    }
+    return dedup;
+  }
+
+  /**
+   * 方法：确保图片大小不超过目标字节（默认 256KB），必要时进行压缩与缩放，且保持原格式不变
+   * 说明：
+   * - 根据原始格式选择合适的压缩策略（JPEG/PNG/WebP/TIFF/GIF），不改变扩展名与 MIME。
+   * - 逐步降低质量（若格式支持），若仍超限则按比例缩小分辨率，最低宽度 64 像素。
+   * - 对 PNG 使用调色板与较高压缩级别；GIF 不保证保留动画质量，仅尝试缩放以减小体积。
+   * - 对不支持输出的格式（如 BMP），保持原文件不变。
+   * 返回：{ changed, newSize }
+   */
+  static async EnsureMaxSize(filePath, maxBytes = 256 * 1024) {
+    try {
+      const origStat = fs.statSync(filePath);
+      if (origStat.size <= maxBytes) {
+        return { changed: false, newSize: origStat.size };
+      }
+
+      // 读取元数据与扩展名，准备保持原格式压缩
+      const input = sharp(filePath, { animated: true });
+      const meta = await input.metadata();
+      let width = meta.width || null;
+      let bestBuf = null;
+      let bestSize = Number.MAX_SAFE_INTEGER;
+
+      const ext = path.extname(filePath).toLowerCase();
+      let format = (meta.format || '').toLowerCase();
+      const map = { '.jpg': 'jpeg', '.jpeg': 'jpeg', '.png': 'png', '.webp': 'webp', '.gif': 'gif', '.tif': 'tiff', '.tiff': 'tiff', '.bmp': 'bmp' };
+      if (!format) format = map[ext] || 'jpeg';
+
+      // 不支持原格式输出（如 bmp）时，保持原文件不变
+      if (format === 'bmp') {
+        return { changed: false, newSize: origStat.size };
+      }
+
+      // 宽度递减序列（若未知宽度则仅一次尝试）
+      const widthSteps = [];
+      if (width && Number.isFinite(width)) {
+        let w = width;
+        while (w > 64) { widthSteps.push(Math.round(w)); w = Math.round(w * 0.85); }
+        widthSteps.push(64);
+      } else {
+        widthSteps.push(null);
+      }
+
+      // 质量序列（仅用于支持质量的格式）
+      const qualitySeq = [85, 75, 65, 55, 45, 35, 25, 20];
+      // PNG 压缩级别序列
+      const pngLevels = [6, 7, 8, 9];
+
+      for (const w of widthSteps) {
+        if (format === 'png') {
+          for (const cl of pngLevels) {
+            const pipe = sharp(filePath, { animated: true });
+            if (w) pipe.resize({ width: Math.max(64, w), withoutEnlargement: true });
+            const buf = await pipe.png({ compressionLevel: cl, palette: true }).toBuffer();
+            if (buf.length < bestSize) { bestBuf = buf; bestSize = buf.length; }
+            if (buf.length <= maxBytes) break;
+          }
+        } else if (format === 'jpeg') {
+          for (const q of qualitySeq) {
+            const pipe = sharp(filePath, { animated: true });
+            if (w) pipe.resize({ width: Math.max(64, w), withoutEnlargement: true });
+            const buf = await pipe.jpeg({ quality: q, mozjpeg: true }).toBuffer();
+            if (buf.length < bestSize) { bestBuf = buf; bestSize = buf.length; }
+            if (buf.length <= maxBytes) break;
+          }
+        } else if (format === 'webp') {
+          for (const q of qualitySeq) {
+            const pipe = sharp(filePath, { animated: true });
+            if (w) pipe.resize({ width: Math.max(64, w), withoutEnlargement: true });
+            const buf = await pipe.webp({ quality: q, effort: 6 }).toBuffer();
+            if (buf.length < bestSize) { bestBuf = buf; bestSize = buf.length; }
+            if (buf.length <= maxBytes) break;
+          }
+        } else if (format === 'tiff') {
+          for (const q of qualitySeq) {
+            const pipe = sharp(filePath, { animated: true });
+            if (w) pipe.resize({ width: Math.max(64, w), withoutEnlargement: true });
+            const buf = await pipe.tiff({ compression: 'jpeg', quality: q }).toBuffer();
+            if (buf.length < bestSize) { bestBuf = buf; bestSize = buf.length; }
+            if (buf.length <= maxBytes) break;
+          }
+        } else if (format === 'gif') {
+          // GIF 无质量参数，尝试缩放减小体积；动画 GIF 不保证压缩效果
+          const pipe = sharp(filePath, { animated: true });
+          if (w) pipe.resize({ width: Math.max(64, w), withoutEnlargement: true });
+          const buf = await pipe.gif().toBuffer();
+          if (buf.length < bestSize) { bestBuf = buf; bestSize = buf.length; }
+          // 若仍超限，继续下一宽度步
+        } else {
+          // 其它格式：不改变格式要求下无法进一步压缩
+        }
+        if (bestBuf && bestBuf.length <= maxBytes) break;
+      }
+
+      if (!bestBuf) {
+        return { changed: false, newSize: origStat.size };
+      }
+
+      // 原地覆盖写入，保持路径与扩展名不变
+      fs.writeFileSync(filePath, bestBuf);
+      return { changed: true, newSize: bestBuf.length };
+    } catch (_) {
+      // 压缩失败，保留原始文件
+      try {
+        const st = fs.statSync(filePath);
+        return { changed: false, newSize: st.size };
+      } catch (_) {
+        return { changed: false, newSize: 0 };
+      }
+    }
+  }
+
+  /**
    * 方法：直接以原始文件名与格式返回图片（二进制流）
    * 用法：ImageController.SendImageFile(res, img)
    */
@@ -113,11 +280,19 @@ class ImageController {
   /** 方法：上传本地文件（支持多文件）并打标签 */
   static async UploadLocal(req, res) {
     const files = req.files || [];
-    const tags = Array.isArray(req.body.tags) ? req.body.tags : (req.body.tags ? String(req.body.tags).split(',') : []);
+    // 统一将标签规范化为 UTF-8，支持逗号/全角逗号分隔与数组输入
+    const tagsRaw = Array.isArray(req.body.tags) ? req.body.tags : (req.body.tags != null ? [req.body.tags] : []);
+    const tags = ImageController.NormalizeTagsUtf8(tagsRaw);
     if (!files.length) return res.status(400).json({ error: '未选择文件' });
     const tagIds = await TagRepository.EnsureTags(tags);
     const created = [];
     for (const f of files) {
+      // 若文件超过 256KB，自动压缩至不超过 256KB（保留原格式，仅覆盖文件）
+      const result = await ImageController.EnsureMaxSize(f.path, 256 * 1024);
+      if (result.changed) {
+        // 保留原路径、文件名与 MIME，仅更新大小
+        f.size = result.newSize;
+      }
       const id = await ImageRepository.CreateImage({
         ownerId: req.user?.id,
         filename: f.filename,
@@ -138,8 +313,9 @@ class ImageController {
   /** 方法：通过URL批量上传图片，并为其打标签 */
   static async UploadByUrl(req, res) {
     const { urls = [], tags = [] } = req.body || {};
+    const tagsNorm = ImageController.NormalizeTagsUtf8(Array.isArray(tags) ? tags : (tags != null ? [tags] : []));
     if (!Array.isArray(urls) || urls.length === 0) return res.status(400).json({ error: '未提供URL列表' });
-    const tagIds = await TagRepository.EnsureTags(tags);
+    const tagIds = await TagRepository.EnsureTags(tagsNorm);
     const uploadsDir = Config.Get().m_UploadsDir;
     const created = [];
     for (const url of urls) {
@@ -154,13 +330,24 @@ class ImageController {
         // 原始名称：尽量取 URL 路径的基名（去除查询与片段）
         let originalName = path.basename(String(url).split('?')[0].split('#')[0]);
         if (!path.extname(originalName)) originalName = newName; // 无扩展名则回退为新名
+
+        // 压缩至不超过 256KB（保留原格式，仅覆盖文件），并更新 size
+        const result = await ImageController.EnsureMaxSize(outPath, 256 * 1024);
+        let finalPath = outPath;
+        let finalName = newName;
+        let finalMime = mainType || rawType;
+        let finalSize = fs.statSync(outPath).size;
+        if (result.changed) {
+          // 保留路径、文件名与 MIME，仅更新大小
+          finalSize = result.newSize;
+        }
         const id = await ImageRepository.CreateImage({
           ownerId: req.user?.id,
-          filename: newName,
+          filename: finalName,
           originalName,
-          mimeType: mainType || rawType,
-          size: fs.statSync(outPath).size,
-          storagePath: outPath,
+          mimeType: finalMime,
+          size: finalSize,
+          storagePath: finalPath,
           remoteUrl: url,
         });
         await ImageRepository.AttachTags(id, tagIds);
