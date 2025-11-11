@@ -305,7 +305,7 @@ class ImageController {
       await ImageRepository.AttachTags(id, tagIds);
       created.push({ id });
     }
-    return res.json({ created });
+    return res.json({ images: created });
   }
 
   // ZIP上传功能已移除，若需批量上传请使用多文件上传或URL批量上传接口
@@ -357,7 +357,27 @@ class ImageController {
         created.push({ error: `下载失败: ${url}` });
       }
     }
-    return res.json({ created });
+    return res.json({ images: created });
+  }
+
+  /**
+   * 方法：获取图片列表（JSON格式）
+   */
+  static async ListImages(req, res) {
+    const tags = (req.query.tags ? String(req.query.tags).split(',').filter(Boolean) : []);
+    const rows = await ImageRepository.ListImagesByTags(tags);
+    const images = (rows || [])
+      .filter(r => {
+        const filePath = r.storage_path && path.resolve(r.storage_path);
+        return filePath && fs.existsSync(filePath);
+      })
+      .map(r => ({
+        id: r.id,
+        filename: r.filename,
+        tags: r.tags || '',
+        created_at: r.created_at
+      }));
+    return res.json({ images });
   }
 
   /**
