@@ -37,6 +37,9 @@ async function Bootstrap() {
   app.use(express.json({ limit: '10mb' }));
   app.use(morgan('dev'));
 
+  // 静态文件服务
+  app.use(express.static(path.join(__dirname, '../../public')));
+
   // 文件上传存储配置
   const storage = multer.diskStorage({
     destination: function (req, file, cb) {
@@ -58,7 +61,8 @@ async function Bootstrap() {
   app.post('/api/images/upload', AuthMiddleware.VerifyToken, upload.array('files', 50), ImageController.UploadLocal);
   app.post('/api/images/upload-url', AuthMiddleware.VerifyToken, ImageController.UploadByUrl);
 
-  app.get('/api/images', ImageController.GetImages); // 获取图片列表或随机
+  app.get('/api/images/list', ImageController.ListImages); // 获取图片列表（JSON）
+  app.get('/api/images', ImageController.GetImages); // 获取单张图片或随机
   app.get('/api/images/:id/raw', ImageController.GetRaw); // 获取原图
   app.delete('/api/images/:id', AuthMiddleware.VerifyToken, ImageController.DeleteImage); // 删除图片
 

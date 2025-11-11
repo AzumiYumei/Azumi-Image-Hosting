@@ -7,7 +7,8 @@
     "doc": "docs"
   },
   "scripts": {
-    "start": "node src/app/server.js"
+    "start": "node src/app/server.js",
+    "start:8080": "set PORT=8080 && node src/app/server.js"
   },
   "keywords": [],
   "author": "",

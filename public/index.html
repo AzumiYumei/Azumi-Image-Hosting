@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>管理面板 - Azumi 图床</title>
+  <link rel="stylesheet" href="/css/style.css">
+</head>
+<body>
+  <div class="header">
+    <h1>Azumi 图床管理</h1>
+    <div class="user-info">
+      <span id="username"></span>
+      <button id="logoutBtn">退出</button>
+    </div>
+  </div>
+
+  <div class="container">
+    <div class="tabs">
+      <button class="tab active" data-tab="upload">上传图片</button>
+      <button class="tab" data-tab="gallery">图片管理</button>
+      <button class="tab admin-only hidden" data-tab="admin">管理员</button>
+    </div>
+
+    <!-- 上传区域 -->
+    <div id="uploadTab" class="tab-content">
+      <div class="upload-section">
+        <h2>本地上传</h2>
+        <input type="file" id="fileInput" multiple accept="image/*">
+        <input type="text" id="fileTags" placeholder="标签（逗号分隔）">
+        <button id="uploadBtn">上传</button>
+      </div>
+
+      <div class="upload-section">
+        <h2>URL上传</h2>
+        <textarea id="urlInput" placeholder="图片URL（每行一个）" rows="5"></textarea>
+        <input type="text" id="urlTags" placeholder="标签（逗号分隔）">
+        <button id="uploadUrlBtn">上传</button>
+      </div>
+
+      <div id="uploadMessage" class="message"></div>
+    </div>
+
+    <!-- 图片管理 -->
+    <div id="galleryTab" class="tab-content hidden">
+      <div class="filter-bar">
+        <input type="text" id="searchTags" placeholder="搜索标签">
+        <button id="searchBtn">搜索</button>
+        <button id="refreshBtn">刷新</button>
+      </div>
+      <div id="imageGrid" class="image-grid"></div>
+    </div>
+
+    <!-- 管理员面板 -->
+    <div id="adminTab" class="tab-content hidden admin-only">
+      <div class="admin-section">
+        <h2>用户管理</h2>
+        <div id="userList"></div>
+      </div>
+      <div class="admin-section">
+        <h2>数据库状态</h2>
+        <button id="dbStatusBtn">查看状态</button>
+        <pre id="dbStatus"></pre>
+      </div>
+      <div class="admin-section">
+        <h2>备份管理</h2>
+        <button id="exportBtn">导出备份</button>
+        <input type="file" id="importInput" accept=".zip">
+        <button id="importBtn">导入备份</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="/js/app.js"></script>
+</body>
+</html>

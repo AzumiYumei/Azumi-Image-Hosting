@@ -50,18 +50,31 @@ class ImageRepository {
   /** 方法：列出图片（可选标签过滤） */
   static async ListImagesByTags(tagNames = []) {
     const db = Database.Get();
+    let images;
     if (!tagNames || tagNames.length === 0) {
-      return await db.All('SELECT * FROM images ORDER BY id DESC');
+      images = await db.All('SELECT * FROM images ORDER BY id DESC');
+    } else {
+      const placeholders = tagNames.map(() => '?').join(',');
+      images = await db.All(
+        `SELECT DISTINCT i.* FROM images i
+         JOIN image_tags it ON i.id = it.image_id
+         JOIN tags t ON t.id = it.tag_id
+         WHERE t.name IN (${placeholders})
+         ORDER BY i.id DESC`,
+        tagNames
+      );
     }
-    const placeholders = tagNames.map(() => '?').join(',');
-    return await db.All(
-      `SELECT DISTINCT i.* FROM images i
-       JOIN image_tags it ON i.id = it.image_id
-       JOIN tags t ON t.id = it.tag_id
-       WHERE t.name IN (${placeholders})
-       ORDER BY i.id DESC`,
-      tagNames
-    );
+    // 为每张图片获取标签
+    for (const img of images) {
+      const tagRows = await db.All(
+        `SELECT t.name FROM tags t
+         JOIN image_tags it ON t.id = it.tag_id
+         WHERE it.image_id = ?`,
+        [img.id]
+      );
+      img.tags = tagRows.map(t => t.name).join(', ');
+    }
+    return images;
   }
 
   /** 方法：随机获取图片（可选择标签过滤与数量限制） */

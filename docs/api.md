@@ -25,7 +25,7 @@
 ## 图片
 - `POST /api/images/upload`（需认证）
   - form-data: `files[]` 多文件, 可选 `tags`（逗号分隔或多值）
-  - 返回: `{ created: [{ id }, ...] }`
+  - 返回: `{ images: [{ id }, ...] }`
   - curl 示例（多文件 + 多标签）：
     ```
     curl -X POST http://<HOST>:<PORT>/api/images/upload \
@@ -47,13 +47,20 @@
     ```
 - `POST /api/images/upload-url`（需认证）
   - body: `{ urls: ["http://...","..."], tags: ["tag1","tag2"] }`
-  - 返回: `{ created: [{ id } | { error }, ...] }`
+  - 返回: `{ images: [{ id } | { error }, ...] }`
   - curl 示例：
     ```
     curl -X POST http://<HOST>:<PORT>/api/images/upload-url \
       -H 'Authorization: Bearer <TOKEN>' \
       -H 'Content-Type: application/json' \
       -d '{"urls":["https://example.com/a.png","https://example.com/b.jpg"],"tags":["code","js"]}'
+    ```
+- `GET /api/images/list`
+  - 查询参数：`tags=tag1,tag2`（可选）
+  - 返回: `{ images: [{ id, filename, tags, created_at }, ...] }`（JSON格式的图片列表）
+  - curl 示例：
+    ```
+    curl "http://<HOST>:<PORT>/api/images/list?tags=avatar"
     ```
 - `GET /api/images`
   - 查询参数：`tags=tag1,tag2`（可选）、`random=true|false`
