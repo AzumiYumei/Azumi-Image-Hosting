@@ -124,11 +124,11 @@ async function loadImages(tags = '') {
       const card = document.createElement('div');
       card.className = 'image-card';
       card.innerHTML = `
-        <img src="${API_BASE}/images/${img.id}/raw" alt="${img.filename}">
+        <img src="${img.url}" alt="${img.filename}">
         <div class="image-info">
           <div class="image-tags">${img.tags || '无标签'}</div>
           <div class="image-actions">
-            <button onclick="copyUrl(${img.id})">复制链接</button>
+            <button onclick="copyUrl('${img.url}')">复制链接</button>
             <button onclick="deleteImage(${img.id})">删除</button>
           </div>
         </div>
@@ -152,9 +152,9 @@ document.getElementById('refreshBtn').addEventListener('click', () => {
 });
 
 // 复制图片链接
-window.copyUrl = function(id) {
-  const url = `${window.location.origin}${API_BASE}/images/${id}/raw`;
-  navigator.clipboard.writeText(url).then(() => {
+window.copyUrl = function(url) {
+  const fullUrl = `${window.location.origin}${url}`;
+  navigator.clipboard.writeText(fullUrl).then(() => {
     showMessage('链接已复制', 'success');
   });
 };

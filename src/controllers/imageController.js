@@ -293,7 +293,7 @@ class ImageController {
         // 保留原路径、文件名与 MIME，仅更新大小
         f.size = result.newSize;
       }
-      const id = await ImageRepository.CreateImage({
+      const { id, accessToken } = await ImageRepository.CreateImage({
         ownerId: req.user?.id,
         filename: f.filename,
         originalName: f.originalname,
@@ -303,7 +303,7 @@ class ImageController {
         remoteUrl: null,
       });
       await ImageRepository.AttachTags(id, tagIds);
-      created.push({ id });
+      created.push({ id, url: `/api/images/${accessToken}` });
     }
     return res.json({ images: created });
   }
@@ -341,7 +341,7 @@ class ImageController {
           // 保留路径、文件名与 MIME，仅更新大小
           finalSize = result.newSize;
         }
-        const id = await ImageRepository.CreateImage({
+        const { id, accessToken } = await ImageRepository.CreateImage({
           ownerId: req.user?.id,
           filename: finalName,
           originalName,
@@ -351,7 +351,7 @@ class ImageController {
           remoteUrl: url,
         });
         await ImageRepository.AttachTags(id, tagIds);
-        created.push({ id });
+        created.push({ id, url: `/api/images/${accessToken}` });
       } catch (err) {
         // 单个URL失败不影响整体，记录错误
         created.push({ error: `下载失败: ${url}` });
@@ -375,9 +375,21 @@ class ImageController {
         id: r.id,
         filename: r.filename,
         tags: r.tags || '',
+        url: `/api/images/${r.access_token}`,
         created_at: r.created_at
       }));
     return res.json({ images });
+  }
+
+  /** 方法：通过访问令牌获取图片 */
+  static async GetImageByToken(req, res) {
+    const token = req.params.token;
+    const img = await ImageRepository.GetImageByToken(token);
+    if (!img) {
+      res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+      return res.status(404).send('图片不存在');
+    }
+    return await ImageController.SendImageFile(res, img);
   }
 
   /**
