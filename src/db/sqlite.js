@@ -44,6 +44,7 @@ class Database {
       size INTEGER,
       storage_path TEXT NOT NULL,
       remote_url TEXT,
+      access_token TEXT UNIQUE,
       created_at TEXT NOT NULL,
       FOREIGN KEY(owner_id) REFERENCES users(id) ON DELETE SET NULL
     );`);

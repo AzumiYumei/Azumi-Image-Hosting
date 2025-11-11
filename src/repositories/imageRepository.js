@@ -15,16 +15,18 @@
 const { Database } = require('../db/sqlite');
 
 class ImageRepository {
-  /** 方法：创建图片记录并返回ID */
+  /** 方法：创建图片记录并返回ID和访问令牌 */
   static async CreateImage({ ownerId, filename, originalName, mimeType, size, storagePath, remoteUrl }) {
     const db = Database.Get();
     const now = new Date().toISOString();
+    const crypto = require('crypto');
+    const accessToken = crypto.randomBytes(16).toString('hex');
     const res = await db.Run(
-      `INSERT INTO images (owner_id, filename, original_name, mime_type, size, storage_path, remote_url, created_at)
-       VALUES (?,?,?,?,?,?,?,?)`,
-      [ownerId || null, filename, originalName || null, mimeType || null, size || 0, storagePath, remoteUrl || null, now]
+      `INSERT INTO images (owner_id, filename, original_name, mime_type, size, storage_path, remote_url, access_token, created_at)
+       VALUES (?,?,?,?,?,?,?,?,?)`,
+      [ownerId || null, filename, originalName || null, mimeType || null, size || 0, storagePath, remoteUrl || null, accessToken, now]
     );
-    return res.lastID;
+    return { id: res.lastID, accessToken };
   }
 
   /** 方法：为图片关联标签 */
@@ -39,6 +41,12 @@ class ImageRepository {
   static async GetImageById(id) {
     const db = Database.Get();
     return await db.Get('SELECT * FROM images WHERE id = ?', [id]);
+  }
+
+  /** 方法：根据访问令牌获取图片 */
+  static async GetImageByToken(token) {
+    const db = Database.Get();
+    return await db.Get('SELECT * FROM images WHERE access_token = ?', [token]);
   }
 
   /** 方法：删除图片 */

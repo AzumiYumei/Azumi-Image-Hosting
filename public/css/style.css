@@ -234,3 +234,22 @@ button:hover {
   margin-top: 10px;
   overflow-x: auto;
 }
+
+.tag-group {
+  margin-bottom: 30px;
+}
+
+.tag-group-header {
+  background: #007bff;
+  color: #fff;
+  padding: 10px 15px;
+  border-radius: 4px;
+  margin-bottom: 15px;
+  font-weight: bold;
+}
+
+.tag-group-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: 15px;
+}

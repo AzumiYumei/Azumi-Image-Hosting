@@ -62,8 +62,8 @@ async function Bootstrap() {
   app.post('/api/images/upload-url', AuthMiddleware.VerifyToken, ImageController.UploadByUrl);
 
   app.get('/api/images/list', ImageController.ListImages); // 获取图片列表（JSON）
-  app.get('/api/images', ImageController.GetImages); // 获取单张图片或随机
-  app.get('/api/images/:id/raw', ImageController.GetRaw); // 获取原图
+  app.get('/api/images', ImageController.GetImages); // 随机图片（带查询参数）
+  app.get('/api/images/:token', ImageController.GetImageByToken); // 通过token获取图片
   app.delete('/api/images/:id', AuthMiddleware.VerifyToken, ImageController.DeleteImage); // 删除图片
 
   // ------------------ 标签 ------------------
