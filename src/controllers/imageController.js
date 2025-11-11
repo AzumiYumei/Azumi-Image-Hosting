@@ -396,48 +396,41 @@ class ImageController {
    * 方法：按标签检索或随机获取图片（始终返回单张）
    * 说明：
    * - 当 random=true 时，从匹配集合中随机选择 1 张并直接返回二进制（保留原名与格式）
-   * - 当 random=false 时，按时间倒序选择最新的一张并返回
-   * - 不支持多张获取，忽略任何 count 参数
+   * - 支持模糊匹配标签
    */
   static async GetImages(req, res) {
-    const tags = (req.query.tags ? String(req.query.tags).split(',').filter(Boolean) : []);
+    const keyword = req.query.tags ? String(req.query.tags) : '';
     const random = String(req.query.random || 'false').toLowerCase() === 'true';
-    if (random) {
-      // 随机场景：循环随机，若命中缺失文件则删除记录并继续随机，直到合法图片或无图
-      // 为避免极端情况导致无限循环，限定最大尝试次数（上限与现有匹配数量相近）
-      let tries = 0;
-      const maxTries = 50;
-      while (tries < maxTries) {
-        const pick = await ImageRepository.RandomImages(tags, 1);
-        const candidate = (pick && pick[0]) || null;
-        if (!candidate) break; // 无匹配记录
-        const filePath = candidate.storage_path && path.resolve(candidate.storage_path);
-        if (filePath && fs.existsSync(filePath)) {
-          return await ImageController.SendImageFile(res, candidate);
-        }
-        // 缺失：删除记录并继续随机
-        try {
-          if (candidate.id) await ImageRepository.DeleteImage(candidate.id);
-        } catch (_) {}
-        tries++;
-      }
-      res.setHeader('Content-Type', 'text/plain; charset=utf-8');
-      return res.status(404).send('未找到匹配图片');
-    } else {
-      // 非随机场景：按时间倒序，遇到缺失文件则删除记录并继续找下一张
-      const rows = await ImageRepository.ListImagesByTags(tags);
-      for (const r of (rows || [])) {
-        const filePath = r.storage_path && path.resolve(r.storage_path);
-        if (filePath && fs.existsSync(filePath)) {
-          return await ImageController.SendImageFile(res, r);
-        }
-        try {
-          if (r.id) await ImageRepository.DeleteImage(r.id);
-        } catch (_) {}
-      }
+
+    // 获取所有图片并进行模糊匹配
+    const allImages = await ImageRepository.ListImagesByTags([]);
+    let matchedImages = allImages;
+
+    if (keyword) {
+      const lowerKeyword = keyword.toLowerCase();
+      matchedImages = allImages.filter(img => {
+        const tags = (img.tags || '').toLowerCase();
+        return tags.includes(lowerKeyword);
+      });
+    }
+
+    if (!matchedImages.length) {
       res.setHeader('Content-Type', 'text/plain; charset=utf-8');
       return res.status(404).send('未找到匹配图片');
     }
+
+    // 随机或按时间选择
+    const candidate = random
+      ? matchedImages[Math.floor(Math.random() * matchedImages.length)]
+      : matchedImages[0];
+
+    const filePath = candidate.storage_path && path.resolve(candidate.storage_path);
+    if (filePath && fs.existsSync(filePath)) {
+      return await ImageController.SendImageFile(res, candidate);
+    }
+
+    res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+    return res.status(404).send('图片文件不存在');
   }
 
   /** 方法：获取任意图片原始内容 */

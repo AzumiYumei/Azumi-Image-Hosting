@@ -106,10 +106,9 @@ document.getElementById('uploadUrlBtn').addEventListener('click', async () => {
 });
 
 // 加载图片列表
-async function loadImages(tags = '') {
+async function loadImages(searchKeyword = '') {
   try {
-    const url = tags ? `${API_BASE}/images/list?tags=${encodeURIComponent(tags)}` : `${API_BASE}/images/list`;
-    const res = await fetch(url);
+    const res = await fetch(`${API_BASE}/images/list`);
     const data = await res.json();
 
     const grid = document.getElementById('imageGrid');
@@ -120,21 +119,87 @@ async function loadImages(tags = '') {
       return;
     }
 
-    data.images.forEach(img => {
-      const card = document.createElement('div');
-      card.className = 'image-card';
-      card.innerHTML = `
-        <img src="${img.url}" alt="${img.filename}">
-        <div class="image-info">
-          <div class="image-tags">${img.tags || '无标签'}</div>
-          <div class="image-actions">
-            <button onclick="copyUrl('${img.url}')">复制链接</button>
-            <button onclick="deleteImage(${img.id})">删除</button>
+    let filteredImages = data.images;
+
+    // 模糊搜索
+    if (searchKeyword) {
+      const keyword = searchKeyword.toLowerCase();
+      filteredImages = data.images.filter(img => {
+        const tags = (img.tags || '').toLowerCase();
+        return tags.includes(keyword);
+      });
+
+      if (!filteredImages.length) {
+        grid.innerHTML = '<p>未找到匹配的图片</p>';
+        return;
+      }
+
+      // 按匹配的标签分组
+      const groupedByTag = {};
+      filteredImages.forEach(img => {
+        const imgTags = (img.tags || '').split(',').map(t => t.trim());
+        imgTags.forEach(tag => {
+          if (tag.toLowerCase().includes(keyword)) {
+            if (!groupedByTag[tag]) {
+              groupedByTag[tag] = [];
+            }
+            if (!groupedByTag[tag].find(i => i.id === img.id)) {
+              groupedByTag[tag].push(img);
+            }
+          }
+        });
+      });
+
+      // 渲染分组
+      Object.keys(groupedByTag).forEach(tag => {
+        const group = document.createElement('div');
+        group.className = 'tag-group';
+
+        const header = document.createElement('div');
+        header.className = 'tag-group-header';
+        header.textContent = `${tag} (${groupedByTag[tag].length})`;
+        group.appendChild(header);
+
+        const tagGrid = document.createElement('div');
+        tagGrid.className = 'tag-group-grid';
+
+        groupedByTag[tag].forEach(img => {
+          const card = document.createElement('div');
+          card.className = 'image-card';
+          card.innerHTML = `
+            <img src="${img.url}" alt="${img.filename}">
+            <div class="image-info">
+              <div class="image-tags">${img.tags || '无标签'}</div>
+              <div class="image-actions">
+                <button onclick="copyUrl('${img.url}')">复制链接</button>
+                <button onclick="deleteImage(${img.id})">删除</button>
+              </div>
+            </div>
+          `;
+          tagGrid.appendChild(card);
+        });
+
+        group.appendChild(tagGrid);
+        grid.appendChild(group);
+      });
+    } else {
+      // 无搜索关键词，正常显示
+      filteredImages.forEach(img => {
+        const card = document.createElement('div');
+        card.className = 'image-card';
+        card.innerHTML = `
+          <img src="${img.url}" alt="${img.filename}">
+          <div class="image-info">
+            <div class="image-tags">${img.tags || '无标签'}</div>
+            <div class="image-actions">
+              <button onclick="copyUrl('${img.url}')">复制链接</button>
+              <button onclick="deleteImage(${img.id})">删除</button>
+            </div>
           </div>
-        </div>
-      `;
-      grid.appendChild(card);
-    });
+        `;
+        grid.appendChild(card);
+      });
+    }
   } catch (err) {
     showMessage('加载失败', 'error');
   }
@@ -149,6 +214,13 @@ document.getElementById('searchBtn').addEventListener('click', () => {
 document.getElementById('refreshBtn').addEventListener('click', () => {
   document.getElementById('searchTags').value = '';
   loadImages();
+});
+
+// 随机一张图片
+document.getElementById('randomBtn').addEventListener('click', async () => {
+  const tags = document.getElementById('searchTags').value;
+  const url = tags ? `${API_BASE}/images?random=true&tags=${encodeURIComponent(tags)}` : `${API_BASE}/images?random=true`;
+  window.open(url, '_blank');
 });
 
 // 复制图片链接
