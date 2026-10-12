@@ -2,381 +2,181 @@ const API_BASE = '/api';
 const token = localStorage.getItem('token');
 const username = localStorage.getItem('username');
 const isAdmin = localStorage.getItem('isAdmin') === 'true';
-
-// 检查登录状态
-if (!token) {
-  window.location.href = '/login.html';
-}
-
-// 初始化
+if (!token) window.location.href = '/login.html';
 document.getElementById('username').textContent = username;
-if (isAdmin) {
-  document.querySelectorAll('.admin-only').forEach(el => el.classList.remove('hidden'));
+if (isAdmin) document.querySelectorAll('.admin-only').forEach(element => element.classList.remove('hidden'));
+
+async function request(endpoint, options = {}) {
+  const response = await fetch(`${API_BASE}${endpoint}`, { ...options, headers: { Authorization: `Bearer ${token}`, ...options.headers } });
+  const data = await response.json();
+  if (!response.ok) {
+    if (response.status === 401) { localStorage.clear(); window.location.href = '/login.html'; }
+    throw new Error(data.error || '请求失败');
+  }
+  return data;
 }
-
-// 标签切换
-document.querySelectorAll('.tab').forEach(tab => {
-  tab.addEventListener('click', () => {
-    const target = tab.dataset.tab;
-    document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
-    tab.classList.add('active');
-
-    document.getElementById('uploadTab').classList.toggle('hidden', target !== 'upload');
-    document.getElementById('galleryTab').classList.toggle('hidden', target !== 'gallery');
-    document.getElementById('adminTab').classList.toggle('hidden', target !== 'admin');
-
-    if (target === 'gallery') loadImages();
-    if (target === 'admin') loadUsers();
-  });
-});
-
-// 退出登录
-document.getElementById('logoutBtn').addEventListener('click', () => {
-  localStorage.clear();
-  window.location.href = '/login.html';
-});
-
-// 本地上传
-document.getElementById('uploadBtn').addEventListener('click', async () => {
-  const files = document.getElementById('fileInput').files;
-  const tags = document.getElementById('fileTags').value;
-
-  if (!files.length) {
-    showMessage('请选择文件', 'error');
-    return;
-  }
-
-  const formData = new FormData();
-  for (let file of files) {
-    formData.append('files', file);
-  }
-  if (tags) formData.append('tags', tags);
-
-  try {
-    const res = await fetch(`${API_BASE}/images/upload`, {
-      method: 'POST',
-      headers: { 'Authorization': `Bearer ${token}` },
-      body: formData
-    });
-
-    const data = await res.json();
-    if (res.ok) {
-      showMessage(`成功上传 ${data.images.length} 张图片`, 'success');
-      document.getElementById('fileInput').value = '';
-      document.getElementById('fileTags').value = '';
-    } else {
-      showMessage(data.error || '上传失败', 'error');
-    }
-  } catch (err) {
-    showMessage('网络错误', 'error');
-  }
-});
-
-// URL上传
-document.getElementById('uploadUrlBtn').addEventListener('click', async () => {
-  const urls = document.getElementById('urlInput').value.split('\n').filter(u => u.trim());
-  const tags = document.getElementById('urlTags').value;
-
-  if (!urls.length) {
-    showMessage('请输入URL', 'error');
-    return;
-  }
-
-  try {
-    const res = await fetch(`${API_BASE}/images/upload-url`, {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${token}`,
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify({ urls, tags })
-    });
-
-    const data = await res.json();
-    if (res.ok) {
-      showMessage(`成功上传 ${data.images.length} 张图片`, 'success');
-      document.getElementById('urlInput').value = '';
-      document.getElementById('urlTags').value = '';
-    } else {
-      showMessage(data.error || '上传失败', 'error');
-    }
-  } catch (err) {
-    showMessage('网络错误', 'error');
-  }
-});
-
-// 加载图片列表
-async function loadImages(searchKeyword = '') {
-  try {
-    const res = await fetch(`${API_BASE}/images/list`);
-    const data = await res.json();
-
-    const grid = document.getElementById('imageGrid');
-    grid.innerHTML = '';
-
-    if (!data.images || !data.images.length) {
-      grid.innerHTML = '<p>暂无图片</p>';
-      return;
-    }
-
-    let filteredImages = data.images;
-
-    // 模糊搜索
-    if (searchKeyword) {
-      const keyword = searchKeyword.toLowerCase();
-      filteredImages = data.images.filter(img => {
-        const tags = (img.tags || '').toLowerCase();
-        return tags.includes(keyword);
-      });
-
-      if (!filteredImages.length) {
-        grid.innerHTML = '<p>未找到匹配的图片</p>';
-        return;
-      }
-
-      // 按匹配的标签分组
-      const groupedByTag = {};
-      filteredImages.forEach(img => {
-        const imgTags = (img.tags || '').split(',').map(t => t.trim());
-        imgTags.forEach(tag => {
-          if (tag.toLowerCase().includes(keyword)) {
-            if (!groupedByTag[tag]) {
-              groupedByTag[tag] = [];
-            }
-            if (!groupedByTag[tag].find(i => i.id === img.id)) {
-              groupedByTag[tag].push(img);
-            }
-          }
-        });
-      });
-
-      // 渲染分组
-      Object.keys(groupedByTag).forEach(tag => {
-        const group = document.createElement('div');
-        group.className = 'tag-group';
-
-        const header = document.createElement('div');
-        header.className = 'tag-group-header';
-        header.textContent = `${tag} (${groupedByTag[tag].length})`;
-        group.appendChild(header);
-
-        const tagGrid = document.createElement('div');
-        tagGrid.className = 'tag-group-grid';
-
-        groupedByTag[tag].forEach(img => {
-          const card = document.createElement('div');
-          card.className = 'image-card';
-          card.innerHTML = `
-            <img src="${img.url}" alt="${img.filename}">
-            <div class="image-info">
-              <div class="image-tags">${img.tags || '无标签'}</div>
-              <div class="image-actions">
-                <button onclick="copyUrl('${img.url}')">复制链接</button>
-                <button onclick="deleteImage(${img.id})">删除</button>
-              </div>
-            </div>
-          `;
-          tagGrid.appendChild(card);
-        });
-
-        group.appendChild(tagGrid);
-        grid.appendChild(group);
-      });
-    } else {
-      // 无搜索关键词，正常显示
-      filteredImages.forEach(img => {
-        const card = document.createElement('div');
-        card.className = 'image-card';
-        card.innerHTML = `
-          <img src="${img.url}" alt="${img.filename}">
-          <div class="image-info">
-            <div class="image-tags">${img.tags || '无标签'}</div>
-            <div class="image-actions">
-              <button onclick="copyUrl('${img.url}')">复制链接</button>
-              <button onclick="deleteImage(${img.id})">删除</button>
-            </div>
-          </div>
-        `;
-        grid.appendChild(card);
-      });
-    }
-  } catch (err) {
-    showMessage('加载失败', 'error');
-  }
-}
-
-// 搜索图片
-document.getElementById('searchBtn').addEventListener('click', () => {
-  const tags = document.getElementById('searchTags').value;
-  loadImages(tags);
-});
-
-document.getElementById('refreshBtn').addEventListener('click', () => {
-  document.getElementById('searchTags').value = '';
-  loadImages();
-});
-
-// 随机一张图片
-document.getElementById('randomBtn').addEventListener('click', async () => {
-  const tags = document.getElementById('searchTags').value;
-  const url = tags ? `${API_BASE}/images?random=true&tags=${encodeURIComponent(tags)}` : `${API_BASE}/images?random=true`;
-  window.open(url, '_blank');
-});
-
-// 复制图片链接
-window.copyUrl = function(url) {
-  const fullUrl = `${window.location.origin}${url}`;
-  navigator.clipboard.writeText(fullUrl).then(() => {
-    showMessage('链接已复制', 'success');
-  });
-};
-
-// 删除图片
-window.deleteImage = async function(id) {
-  if (!confirm('确定删除这张图片？')) return;
-
-  try {
-    const res = await fetch(`${API_BASE}/images/${id}`, {
-      method: 'DELETE',
-      headers: { 'Authorization': `Bearer ${token}` }
-    });
-
-    if (res.ok) {
-      showMessage('删除成功', 'success');
-      loadImages();
-    } else {
-      const data = await res.json();
-      showMessage(data.error || '删除失败', 'error');
-    }
-  } catch (err) {
-    showMessage('网络错误', 'error');
-  }
-};
-
-// 加载用户列表
-async function loadUsers() {
-  try {
-    const res = await fetch(`${API_BASE}/users`, {
-      headers: { 'Authorization': `Bearer ${token}` }
-    });
-    const data = await res.json();
-
-    const list = document.getElementById('userList');
-    list.innerHTML = '';
-
-    data.users.forEach(user => {
-      const item = document.createElement('div');
-      item.className = 'user-item';
-      item.innerHTML = `
-        <span>${user.username} ${user.is_admin ? '(管理员)' : ''}</span>
-        <button onclick="toggleUserStatus(${user.id}, '${user.status}')">
-          ${user.status === 'active' ? '禁用' : '启用'}
-        </button>
-      `;
-      list.appendChild(item);
-    });
-  } catch (err) {
-    showMessage('加载失败', 'error');
-  }
-}
-
-// 切换用户状态
-window.toggleUserStatus = async function(id, currentStatus) {
-  const newStatus = currentStatus === 'active' ? 'disabled' : 'active';
-
-  try {
-    const res = await fetch(`${API_BASE}/users/${id}/status`, {
-      method: 'PATCH',
-      headers: {
-        'Authorization': `Bearer ${token}`,
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify({ status: newStatus })
-    });
-
-    if (res.ok) {
-      showMessage('状态已更新', 'success');
-      loadUsers();
-    } else {
-      const data = await res.json();
-      showMessage(data.error || '操作失败', 'error');
-    }
-  } catch (err) {
-    showMessage('网络错误', 'error');
-  }
-};
-
-// 查看数据库状态
-document.getElementById('dbStatusBtn').addEventListener('click', async () => {
-  try {
-    const res = await fetch(`${API_BASE}/admin/status/db`, {
-      headers: { 'Authorization': `Bearer ${token}` }
-    });
-    const data = await res.json();
-
-    document.getElementById('dbStatus').textContent = JSON.stringify(data, null, 2);
-  } catch (err) {
-    showMessage('加载失败', 'error');
-  }
-});
-
-// 导出备份
-document.getElementById('exportBtn').addEventListener('click', async () => {
-  try {
-    const res = await fetch(`${API_BASE}/admin/backup/export`, {
-      method: 'POST',
-      headers: { 'Authorization': `Bearer ${token}` }
-    });
-
-    if (res.ok) {
-      const blob = await res.blob();
-      const url = window.URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = `backup-${Date.now()}.zip`;
-      a.click();
-      showMessage('备份已导出', 'success');
-    } else {
-      showMessage('导出失败', 'error');
-    }
-  } catch (err) {
-    showMessage('网络错误', 'error');
-  }
-});
-
-// 导入备份
-document.getElementById('importBtn').addEventListener('click', async () => {
-  const file = document.getElementById('importInput').files[0];
-  if (!file) {
-    showMessage('请选择备份文件', 'error');
-    return;
-  }
-
-  const formData = new FormData();
-  formData.append('backupZip', file);
-
-  try {
-    const res = await fetch(`${API_BASE}/admin/backup/import`, {
-      method: 'POST',
-      headers: { 'Authorization': `Bearer ${token}` },
-      body: formData
-    });
-
-    const data = await res.json();
-    if (res.ok) {
-      showMessage('备份已导入', 'success');
-      document.getElementById('importInput').value = '';
-    } else {
-      showMessage(data.error || '导入失败', 'error');
-    }
-  } catch (err) {
-    showMessage('网络错误', 'error');
-  }
-});
 
 function showMessage(text, type) {
-  const msg = document.getElementById('uploadMessage');
-  msg.textContent = text;
-  msg.className = `message ${type}`;
-  setTimeout(() => msg.className = 'message', 3000);
+  const message = document.getElementById('uploadMessage');
+  message.textContent = text;
+  message.className = `message ${type}`;
 }
+
+document.querySelectorAll('.tab').forEach(tab => tab.addEventListener('click', () => {
+  const target = tab.dataset.tab;
+  document.querySelectorAll('.tab').forEach(item => item.classList.toggle('active', item === tab));
+  for (const name of ['upload', 'gallery', 'admin']) document.getElementById(`${name}Tab`).classList.toggle('hidden', target !== name);
+  if (target === 'gallery') loadImages();
+  if (target === 'admin') loadUsers();
+}));
+
+document.getElementById('logoutBtn').addEventListener('click', () => { localStorage.clear(); window.location.href = '/login.html'; });
+
+// 上传结果兼容两套接口，URL 单项失败时显示实际成功和失败数量。
+function uploaded(data) {
+  const results = data.created || data.images || [];
+  const succeeded = results.filter(item => item.id).length;
+  const failed = results.filter(item => item.error);
+  showMessage(`成功上传 ${succeeded} 张图片${failed.length ? `，失败 ${failed.length} 张：${failed[0].error}` : ''}`, failed.length ? 'error' : 'success');
+}
+
+document.getElementById('uploadBtn').addEventListener('click', async event => {
+  const files = document.getElementById('fileInput').files;
+  if (!files.length) return showMessage('请选择文件', 'error');
+  const form = new FormData();
+  for (const file of files) form.append('files', file);
+  const tags = document.getElementById('fileTags').value;
+  if (tags) form.append('tags', tags);
+  event.currentTarget.disabled = true;
+  try {
+    uploaded(await request('/images/upload', { method: 'POST', body: form }));
+    document.getElementById('fileInput').value = ''; document.getElementById('fileTags').value = '';
+  } catch (err) { showMessage(err.message, 'error'); }
+  finally { document.getElementById('uploadBtn').disabled = false; }
+});
+
+document.getElementById('uploadUrlBtn').addEventListener('click', async () => {
+  const urls = document.getElementById('urlInput').value.split('\n').map(value => value.trim()).filter(Boolean);
+  if (!urls.length) return showMessage('请输入URL', 'error');
+  const button = document.getElementById('uploadUrlBtn'); button.disabled = true;
+  try {
+    const data = await request('/images/upload-url', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ urls, tags: document.getElementById('urlTags').value }) });
+    uploaded(data);
+    if (!(data.created || []).some(item => item.error)) { document.getElementById('urlInput').value = ''; document.getElementById('urlTags').value = ''; }
+  } catch (err) { showMessage(err.message, 'error'); }
+  finally { button.disabled = false; }
+});
+
+let gallery = { keyword: '', before: Number.MAX_SAFE_INTEGER, previous: [], next: null };
+let gallerySequence = 0;
+
+// 通过文本节点显示名称和标签，防止上传内容被当成 HTML 执行。
+function imageCard(image) {
+  const card = document.createElement('div'); card.className = 'image-card';
+  const preview = document.createElement('img'); preview.src = image.url; preview.alt = image.filename; preview.loading = 'lazy';
+  const info = document.createElement('div'); info.className = 'image-info';
+  const tags = document.createElement('div'); tags.className = 'image-tags'; tags.textContent = image.tags || '无标签';
+  const actions = document.createElement('div'); actions.className = 'image-actions';
+  const copy = document.createElement('button'); copy.textContent = '复制链接';
+  copy.addEventListener('click', async () => {
+    try { await navigator.clipboard.writeText(new URL(image.url, location.origin).href); showMessage('链接已复制', 'success'); }
+    catch { showMessage('无法访问剪贴板，请在 HTTPS 或本机环境使用', 'error'); }
+  });
+  const remove = document.createElement('button'); remove.textContent = '删除';
+  remove.addEventListener('click', async () => {
+    if (!confirm('确定删除这张图片？')) return;
+    try { await request(`/images/${image.id}`, { method: 'DELETE' }); showMessage('删除成功', 'success'); await loadImages(gallery.keyword, gallery.before, gallery.previous); }
+    catch (err) { showMessage(err.message, 'error'); }
+  });
+  actions.append(copy, remove); info.append(tags, actions); card.append(preview, info); return card;
+}
+
+async function loadImages(keyword = '', before = Number.MAX_SAFE_INTEGER, previous = []) {
+  const sequence = ++gallerySequence;
+  try {
+    const query = new URLSearchParams({ search: keyword, before: String(before), limit: '50' });
+    const data = await request(`/images/list?${query}`);
+    if (sequence !== gallerySequence) return;
+    gallery = { keyword, before, previous, next: data.nextBefore };
+    const grid = document.getElementById('imageGrid'); grid.replaceChildren();
+    if (!data.images.length) { const empty = document.createElement('p'); empty.textContent = '本页暂无匹配图片'; grid.append(empty); }
+    else if (keyword) {
+      const groups = new Map();
+      for (const image of data.images) for (const tag of image.tags.split(',').map(value => value.trim())) {
+        if (tag.toLowerCase().includes(keyword.toLowerCase())) {
+          if (!groups.has(tag)) groups.set(tag, []);
+          groups.get(tag).push(image);
+        }
+      }
+      for (const [tag, images] of groups) {
+        const group = document.createElement('div'); group.className = 'tag-group';
+        const header = document.createElement('div'); header.className = 'tag-group-header'; header.textContent = `${tag} (${images.length})`;
+        const cards = document.createElement('div'); cards.className = 'tag-group-grid';
+        cards.append(...images.map(imageCard)); group.append(header, cards); grid.append(group);
+      }
+      if (!groups.size) grid.append(...data.images.map(imageCard));
+    } else grid.append(...data.images.map(imageCard));
+    document.getElementById('previousImages').disabled = !previous.length;
+    document.getElementById('nextImages').disabled = !data.nextBefore;
+  } catch (err) { showMessage(err.message, 'error'); }
+}
+
+document.getElementById('searchBtn').addEventListener('click', () => loadImages(document.getElementById('searchTags').value.trim()));
+document.getElementById('refreshBtn').addEventListener('click', () => { document.getElementById('searchTags').value = ''; loadImages(); });
+document.getElementById('nextImages').addEventListener('click', () => { if (gallery.next) loadImages(gallery.keyword, gallery.next, [...gallery.previous, gallery.before]); });
+document.getElementById('previousImages').addEventListener('click', () => { const previous = [...gallery.previous]; const before = previous.pop(); if (before) loadImages(gallery.keyword, before, previous); });
+document.getElementById('randomBtn').addEventListener('click', () => {
+  const query = new URLSearchParams({ random: 'true', tags: document.getElementById('searchTags').value.trim() });
+  window.open(`${API_BASE}/images?${query}`, '_blank', 'noopener');
+});
+
+let nextUser = null;
+let currentUserPage = 0;
+async function loadUsers(after = 0) {
+  try {
+    const data = await request(`/users?after=${after}&limit=100`);
+    currentUserPage = after; nextUser = data.nextAfter;
+    const list = document.getElementById('userList'); list.replaceChildren();
+    for (const user of data.users) {
+      const item = document.createElement('div'); item.className = 'user-item';
+      const label = document.createElement('span'); label.textContent = `${user.username}${user.role === 'admin' ? ' (管理员)' : ''}`;
+      const button = document.createElement('button'); button.textContent = user.status === 'active' ? '禁用' : '启用';
+      button.addEventListener('click', async () => {
+        try {
+          await request(`/users/${user.id}/status`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ status: user.status === 'active' ? 'disabled' : 'active' }) });
+          showMessage('状态已更新', 'success'); await loadUsers(currentUserPage);
+        } catch (err) { showMessage(err.message, 'error'); }
+      });
+      item.append(label, button); list.append(item);
+    }
+    document.getElementById('nextUsers').disabled = !nextUser;
+  } catch (err) { showMessage(err.message, 'error'); }
+}
+document.getElementById('nextUsers').addEventListener('click', () => { if (nextUser) loadUsers(nextUser); });
+document.getElementById('dbStatusBtn').addEventListener('click', async () => {
+  try { document.getElementById('dbStatus').textContent = JSON.stringify(await request('/admin/status/db'), null, 2); }
+  catch (err) { showMessage(err.message, 'error'); }
+});
+
+document.getElementById('exportBtn').addEventListener('click', async () => {
+  const button = document.getElementById('exportBtn'); button.disabled = true;
+  try {
+    const response = await fetch(`${API_BASE}/admin/backup/export?download=true`, { method: 'POST', headers: { Authorization: `Bearer ${token}` } });
+    if (!response.ok) throw new Error((await response.json()).error || '导出失败');
+    const url = URL.createObjectURL(await response.blob());
+    const link = document.createElement('a'); link.href = url; link.download = `backup-${Date.now()}.zip`; link.click();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+    showMessage('备份已导出', 'success');
+  } catch (err) { showMessage(err.message, 'error'); }
+  finally { button.disabled = false; }
+});
+
+document.getElementById('importBtn').addEventListener('click', async () => {
+  const file = document.getElementById('importInput').files[0];
+  if (!file) return showMessage('请选择备份文件', 'error');
+  const form = new FormData(); form.append('backupZip', file);
+  const button = document.getElementById('importBtn'); button.disabled = true;
+  try { await request('/admin/backup/import', { method: 'POST', body: form }); showMessage('备份已导入', 'success'); document.getElementById('importInput').value = ''; }
+  catch (err) { showMessage(err.message, 'error'); }
+  finally { button.disabled = false; }
+});

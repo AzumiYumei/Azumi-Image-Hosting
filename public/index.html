@@ -16,6 +16,7 @@
   </div>
 
   <div class="container">
+    <div id="uploadMessage" class="message"></div>
     <div class="tabs">
       <button class="tab active" data-tab="upload">上传图片</button>
       <button class="tab" data-tab="gallery">图片管理</button>
@@ -38,7 +39,6 @@
         <button id="uploadUrlBtn">上传</button>
       </div>
 
-      <div id="uploadMessage" class="message"></div>
     </div>
 
     <!-- 图片管理 -->
@@ -50,6 +50,10 @@
         <button id="refreshBtn">刷新</button>
       </div>
       <div id="imageGrid" class="image-grid"></div>
+      <div class="filter-bar">
+        <button id="previousImages" disabled>上一页</button>
+        <button id="nextImages" disabled>下一页</button>
+      </div>
     </div>
 
     <!-- 管理员面板 -->
@@ -57,6 +61,7 @@
       <div class="admin-section">
         <h2>用户管理</h2>
         <div id="userList"></div>
+        <button id="nextUsers" disabled>下一页用户</button>
       </div>
       <div class="admin-section">
         <h2>数据库状态</h2>

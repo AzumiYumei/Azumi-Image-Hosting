@@ -23,6 +23,10 @@ class UserRepository {
     return await db.Get('SELECT * FROM users WHERE username = ?', [username]);
   }
 
+  static async FindById(id) {
+    return Database.Get().Get('SELECT id, username, role, status FROM users WHERE id = ?', [id]);
+  }
+
   /** 方法：创建新用户（默认角色user，状态active） */
   static async CreateUser(username, passwordHash, role = 'user') {
     const db = Database.Get();
@@ -54,7 +58,7 @@ class UserRepository {
     if (!adminPassword) return; // 未配置则跳过
     const exists = await this.FindByUsername(adminUsername);
     if (exists) return; // 已存在则跳过
-    const hash = bcrypt.hashSync(adminPassword, 10);
+    const hash = await bcrypt.hash(adminPassword, 10);
     await this.CreateUser(adminUsername, hash, 'admin');
     // 管理员创建后，即可用于登录管理系统
   }

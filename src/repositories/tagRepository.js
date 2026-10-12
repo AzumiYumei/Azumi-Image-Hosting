@@ -21,21 +21,17 @@ class TagRepository {
     for (const name of tagNames) {
       const trimmed = String(name || '').trim();
       if (!trimmed) continue;
-      let tag = await db.Get('SELECT id FROM tags WHERE name = ?', [trimmed]);
-      if (!tag) {
-        const res = await db.Run('INSERT INTO tags (name) VALUES (?)', [trimmed]);
-        ids.push(res.lastID);
-      } else {
-        ids.push(tag.id);
-      }
+      await db.Run('INSERT OR IGNORE INTO tags (name) VALUES (?)', [trimmed]);
+      const tag = await db.Get('SELECT id FROM tags WHERE name = ?', [trimmed]);
+      ids.push(tag.id);
     }
     return ids;
   }
 
   /** 方法：列出所有标签 */
-  static async ListTags() {
+  static async ListTags(after = 0, limit = 100) {
     const db = Database.Get();
-    return await db.All('SELECT id, name FROM tags ORDER BY name ASC');
+    return await db.All('SELECT id, name FROM tags WHERE id > ? ORDER BY id LIMIT ?', [after, limit]);
   }
 }
 

@@ -14,20 +14,25 @@
 // ================================================================
 const jwt = require('jsonwebtoken');
 const { Config } = require('../config');
+const { UserRepository } = require('../repositories/userRepository');
 
 class AuthMiddleware {
   /** 方法：校验JWT并解析用户信息到req.user */
-  static VerifyToken(req, res, next) {
+  static async VerifyToken(req, res, next) {
     const authHeader = req.headers['authorization'];
     const token = authHeader && authHeader.startsWith('Bearer ')
       ? authHeader.substring(7)
       : null;
     if (!token) return res.status(401).json({ error: '未提供令牌' });
     try {
-      const payload = jwt.verify(token, Config.Get().m_JwtSecret);
-      req.user = payload; // { id, username, role }
-      next();
+      const payload = jwt.verify(token, Config.Get().m_JwtSecret, { algorithms: ['HS256'] });
+      if (!Number.isSafeInteger(payload.id)) return res.status(401).json({ error: '令牌无效' });
+      const user = await UserRepository.FindById(payload.id);
+      if (!user || user.status !== 'active') return res.status(403).json({ error: '用户不存在或已被禁用' });
+      req.user = user;
+      return next();
     } catch (err) {
+      if (!['JsonWebTokenError', 'TokenExpiredError', 'NotBeforeError'].includes(err.name)) return next(err);
       return res.status(401).json({ error: '令牌无效或已过期' });
     }
   }
