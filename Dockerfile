@@ -1,32 +1,18 @@
-# Azumi Image Host 容器镜像构建文件
-# 说明：用于在Docker中运行服务，默认暴露3000端口；数据与备份目录通过挂载到容器。
-
-FROM node:20
+# 构建阶段安装原生模块，运行镜像不保留编译工具。
+FROM node:24-bookworm-slim AS build
 WORKDIR /app
-
-# 安装构建依赖以支持 node-gyp（用于编译 sqlite3 等原生模块）
-# - Python3：node-gyp 需要
-# - build-essential：包含 make、gcc、g++ 等编译工具
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends python3 build-essential \
-    && rm -rf /var/lib/apt/lists/*
-
-# 仅复制包信息以优化缓存
+RUN apt-get update && apt-get install -y --no-install-recommends python3 make g++ && rm -rf /var/lib/apt/lists/*
 COPY package*.json ./
-# 指定 Python 路径以确保 node-gyp 能找到 Python3
-ENV npm_config_python=/usr/bin/python3
-ENV PYTHON=/usr/bin/python3
-RUN npm ci --only=production || npm install --production
+RUN npm ci --omit=dev && npm cache clean --force
 
-# 复制源代码
+FROM node:24-bookworm-slim
+WORKDIR /app
+ENV NODE_ENV=production PORT=3000
+COPY --from=build /app/node_modules ./node_modules
+COPY package.json ./
 COPY src ./src
-
-# 预创建运行时目录（最终通过卷挂载到宿主机持久化）
-RUN mkdir -p /app/data/uploads && mkdir -p /app/backups
-
-ENV NODE_ENV=production
-ENV PORT=3000
-# ADMIN_USERNAME/ADMIN_PASSWORD/JWT_SECRET 由运行时传入
-
+RUN mkdir -p /app/data/uploads /app/data/tmp /app/backups && chown -R node:node /app
+USER node
 EXPOSE 3000
+HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 CMD node -e "fetch('http://127.0.0.1:'+process.env.PORT+'/healthz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
 CMD ["node", "src/app/server.js"]

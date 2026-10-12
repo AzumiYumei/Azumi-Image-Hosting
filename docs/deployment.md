@@ -1,88 +1,56 @@
-# 部署文档（Windows & Ubuntu）
-# 部署指南（Ubuntu）
+# 部署与维护
 
-本文档指导在 Ubuntu 服务器上部署 Azumi Image Host，覆盖环境准备、启动方式（前台与 systemd 服务）、Nginx 反向代理与 HTTPS、备份与恢复、升级与维护等。
+## 运行环境
 
-## 环境准备
-- 操作系统：Ubuntu 20.04/22.04/24.04（推荐 22.04+）
-- 必备软件：`git`、`curl`、`build-essential`、`nodejs`（LTS，推荐 20.x）；可选：`nginx`、`jq`
+使用 Node.js 24 LTS。项目依赖 Sharp 和 SQLite 原生模块，安装依赖时使用 `npm ci`，不要在安装失败时退回忽略锁文件的安装。更新依赖后运行 `npm test` 与 `npm audit`。
 
-安装依赖与 Node.js（NodeSource）：
-```
-sudo apt update
-sudo apt install -y git curl build-essential jq
-curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
-sudo apt install -y nodejs
-node -v && npm -v
+## 配置
+
+复制 `.env.example` 为 `.env`，填写管理员密码和密钥。生成随机密钥：
+
+```sh
+node -e "console.log(require('node:crypto').randomBytes(48).toString('hex'))"
 ```
 
-## 获取源码与目录布局
-选择项目目录（示例使用 `/srv/azumi-image-host`）：
-```
-sudo mkdir -p /srv/azumi-image-host
-sudo chown -R $USER:$USER /srv/azumi-image-host
-cd /srv/azumi-image-host
-git clone <你的仓库地址> .
-npm ci || npm install
+`NODE_ENV=production` 时缺少 `JWT_SECRET` 会拒绝启动；显式密钥少于 32 字节也会拒绝启动。更换密钥会使旧令牌失效。`ADMIN_USERNAME`、`ADMIN_PASSWORD` 只在对应用户名不存在时创建管理员，不覆盖已有用户或密码。
+
+| 变量 | 默认值 | 作用 |
+|---|---:|---|
+| PORT / HOST | 3000 / 0.0.0.0 | 直接运行的监听地址 |
+| DATA_DIR / BACKUPS_DIR | ./data / ./backups | 数据和备份目录 |
+| MAX_FILE_BYTES | 20971520 | 单张上传/下载最多 20MiB |
+| MAX_FILES | 20 | 每批最多 20 张，最高可配 50 |
+| MAX_CONCURRENT_UPLOADS | 2 | 全局图片写入任务上限，包含上传和删除 |
+| MAX_IMAGE_PIXELS | 25000000 | 解码总像素上限，动画按所有帧计算 |
+| MAX_IMAGE_FRAMES | 100 | 动画帧数上限 |
+| COMPRESS_TARGET_BYTES | 262144 | 压缩目标，设为 0 关闭 |
+| COMPRESS_ATTEMPTS | 4 | 最大编码尝试次数 |
+| MAX_IMAGE_DIMENSION | 2048 | 需要压缩时的宽高上限 |
+| URL_TIMEOUT_MS | 30000 | 单个 URL 包含解析、跳转和下载的超时 |
+| MAX_BACKUP_BYTES | 1073741824 | ZIP 上传、输出及解压总大小上限 |
+| MAX_BACKUP_MANIFEST_BYTES | 16777216 | 备份 JSON 清单上限 |
+| MAX_BACKUP_ENTRIES | 100000 | ZIP 图片条目与每类清单记录的上限 |
+| BACKUP_KEEP | 3 | 自动保留最近生成的备份数量 |
+| REGISTRATION_ENABLED | true | false 关闭公开注册；示例配置默认关闭 |
+| MAX_TAGS | 32 | 单次标签数量，单个标签最长 100 字符 |
+| ACCESS_LOG | true | false 关闭访问日志 |
+| CORS_ORIGINS | 空 | 允许浏览器跨域的来源列表，逗号分隔 |
+| TRUST_PROXY | 空 | Express 可信代理配置，例如 loopback |
+
+JSON 请求最多 64KiB。认证接口每个来源每分钟最多 20 次，最多同时处理 4 个认证请求。代理配置必须与实际网络匹配，否则客户端可能伪造来源地址，或所有用户共享一个限流来源。
+
+URL 上传仅允许 HTTP/HTTPS 公网地址，拒绝内网、保留地址和带凭据的 URL；每次重定向重新校验 DNS，最多三次重定向。请求不使用系统代理，避免绕过地址限制。
+
+## 直接运行
+
+```sh
+npm ci
+node --env-file=.env src/app/server.js
 ```
 
-目录说明（首次启动会自动创建）：
-- `data/`：应用数据根目录（自动创建）
-  - `db.sqlite`：SQLite 数据库文件
-  - `uploads/`：图片文件存储目录
-- `backups/`：备份输出目录（自动创建）
-- `.gitignore` 已忽略 `data/`、`backups/` 与 `.env`，保证数据与密钥不被提交到仓库
+直接运行需要在 `.env` 中额外设置 `NODE_ENV=production`，并按需设置 `PORT`；`APP_PORT`、`HOST_PORT`、`HOST_IP` 用于 Compose，不影响直接运行。Linux 可通过 systemd 注入环境文件：
 
-## 环境变量与默认值
-- `PORT`：服务监听端口，默认 `8080`
-- `ADMIN_USERNAME`：管理员用户名，默认 `admin`
-- `ADMIN_PASSWORD`：管理员密码（仅用于首次种子创建；未设置则不创建管理员）
-- `JWT_SECRET`：JWT 签名密钥，默认 `azumi-image-host-secret`（生产环境务必自定义）
-
-注意：管理员种子创建逻辑为“若设置了 `ADMIN_PASSWORD` 且指定用户名不存在，则创建管理员并设置该密码；若该用户名已存在则跳过，不会覆盖密码”。
-
-## 启动方式 A：前台启动（快速验证）
-```
-cd /srv/azumi-image-host
-export PORT=8080
-export ADMIN_USERNAME=azumi-admin
-export ADMIN_PASSWORD='请替换为强密码'
-export JWT_SECRET='请替换为强随机密钥'
-npm start
-```
-验证服务：
-```
-curl -s http://127.0.0.1:8080/ -I
-```
-
-验证管理员登录与接口（示例）：
-```
-TOKEN=$(curl -s -X POST http://127.0.0.1:8080/api/auth/login \
-  -H 'Content-Type: application/json' \
-  -d '{"username":"azumi-admin","password":"你的强密码"}' | jq -r .token)
-
-curl -s -H "Authorization: Bearer $TOKEN" http://127.0.0.1:8080/api/users | jq
-```
-
-## 启动方式 B：systemd 服务（生产推荐）
-1) 创建运行用户（可选，增强隔离）：
-```
-sudo adduser --system --group --home /srv/azumi-image-host azumi
-sudo chown -R azumi:azumi /srv/azumi-image-host
-```
-
-2) 创建环境文件（通过 systemd 注入环境变量）：
-```
-sudo -u azumi tee /srv/azumi-image-host/.env >/dev/null <<'EOF'
-PORT=8080
-ADMIN_USERNAME=azumi-admin
-ADMIN_PASSWORD=请替换为强密码
-JWT_SECRET=请替换为强随机密钥
-EOF
-```
-
-3) 创建 systemd 单元：`/etc/systemd/system/azumi-image-host.service`
-```
+```ini
 [Unit]
 Description=Azumi Image Host
 After=network.target
@@ -92,256 +60,46 @@ Type=simple
 User=azumi
 Group=azumi
 WorkingDirectory=/srv/azumi-image-host
+Environment=NODE_ENV=production
 EnvironmentFile=/srv/azumi-image-host/.env
 ExecStart=/usr/bin/node src/app/server.js
-Restart=always
+Restart=on-failure
 RestartSec=3
-AmbientCapabilities=
+TimeoutStopSec=35
 NoNewPrivileges=true
 
 [Install]
 WantedBy=multi-user.target
 ```
 
-4) 启动并设为开机自启：
-```
-sudo systemctl daemon-reload
-sudo systemctl enable azumi-image-host
-sudo systemctl start azumi-image-host
-sudo systemctl status azumi-image-host --no-pager
-```
+## Docker
 
-查看运行日志：
-```
-journalctl -u azumi-image-host -f --no-pager
-```
-
-## 反向代理与 HTTPS（可选）
-安装 Nginx：
-```
-sudo apt install -y nginx
-```
-
-示例站点配置：`/etc/nginx/sites-available/azumi-image-host`
-```
-server {
-    listen 80;
-    server_name example.com;
-
-    location / {
-        proxy_pass http://127.0.0.1:8080/;
-        proxy_http_version 1.1;
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto $scheme;
-    }
-}
-```
-
-启用站点并重载：
-```
-sudo ln -s /etc/nginx/sites-available/azumi-image-host /etc/nginx/sites-enabled/azumi-image-host
-sudo nginx -t && sudo systemctl reload nginx
-```
-
-启用 HTTPS（Let’s Encrypt）：
-```
-sudo apt install -y certbot python3-certbot-nginx
-sudo certbot --nginx -d example.com
-```
-
-## 备份与恢复
-导出备份（ZIP，包含 `data.json` + `images/`）——需管理员：
-```
-curl -H "Authorization: Bearer $TOKEN" \
-  -X POST "http://127.0.0.1:8080/api/admin/backup/export?download=true" \
-  --output backup.zip
-```
-
-导入备份（上传 ZIP）——需管理员：
-```
-curl -H "Authorization: Bearer $TOKEN" \
-  -F "backupZip=@backup.zip" \
-  "http://127.0.0.1:8080/api/admin/backup/import"
-```
-
-数据目录位置（默认）：
-- 数据库：`/srv/azumi-image-host/data/db.sqlite`
-- 图片：`/srv/azumi-image-host/data/uploads/`
-- 备份：`/srv/azumi-image-host/backups/`
-
-## 升级与维护
-- 拉取新版本并重启服务：
-```
-cd /srv/azumi-image-host
-git pull
-npm ci || npm install
-sudo systemctl restart azumi-image-host
-```
-- 修改环境变量后重启：
-```
-sudo systemctl restart azumi-image-host
-```
-- 查看接口文档：详见 `docs/api.md`
-
-## 常见问题
-- 管理员未创建：需确保设置了 `ADMIN_PASSWORD`，并且指定的 `ADMIN_USERNAME` 在数据库中尚不存在。
-- 端口占用：修改 `PORT` 或在 Nginx 中使用反向代理，避免直接暴露端口。
-- `.env` 未生效：前台运行需使用 `export` 导出；生产环境通过 `EnvironmentFile` 注入。
-- 权限问题：确保 `WorkingDirectory` 与数据目录归属 `azumi` 用户，systemd 中使用同一用户运行。
-
-## 变量速查
-- `PORT`（默认 8080）：监听端口
-- `ADMIN_USERNAME`（默认 admin）：管理员用户名（可自定义）
-- `ADMIN_PASSWORD`（无默认）：设置后才会触发管理员种子创建
-- `JWT_SECRET`（默认 azumi-image-host-secret）：JWT 签名密钥（生产务必更换）
-
-完成以上步骤后，你的 Azumi Image Host 即可在 Ubuntu 上稳定运行；如需进一步的限流、访问日志或多实例部署（负载均衡），可通过 Nginx 和 systemd 模板扩展实现。
-
----
-
-# Docker 部署（Ubuntu）
-
-## 前提条件
-- 已安装 Docker 与 Docker Compose（Ubuntu 22.04+ 默认提供 `docker compose` 插件）
-```
-sudo apt update
-sudo apt install -y docker.io
-sudo systemctl enable --now docker
-sudo usermod -aG docker $USER
-newgrp docker
-docker --version
-docker compose version
-```
-
-## 快速开始
-1) 在项目根创建 `.env`（用于注入环境变量）
-```
-tee .env >/dev/null <<'EOF'
-# 容器内部应用端口（保持默认 8080，通常不需要改动）
-APP_PORT=8080
-# 宿主机对外绑定 IP（默认 0.0.0.0；如需仅本机访问，改为 127.0.0.1）
-HOST_IP=0.0.0.0
-# 宿主机对外端口（默认 3000）
-HOST_PORT=3000
-
-ADMIN_USERNAME=azumi-admin
-ADMIN_PASSWORD=请替换为强密码
-JWT_SECRET=请替换为强随机密钥
-EOF
-```
-
-2) 构建并启动（后台运行）
-```
+```sh
 docker compose up -d --build
-```
-
-若出现警告 `the attribute version is obsolete`：
-- 说明：Compose v2 不再使用 `version` 字段；该字段将被忽略。
-- 处理：已在仓库中移除 `version` 字段，更新到最新 `docker-compose.yml` 即可。
-
-3) 查看日志与状态
-```
 docker compose logs -f
-docker compose ps
 ```
 
-如报错 `Cannot connect to the Docker daemon at unix:///var/run/docker.sock`：
-- 确认 Docker 服务已启动：
-  - `sudo systemctl status docker`
-  - 如未运行：`sudo systemctl start docker` 或 `sudo systemctl enable --now docker`
-- 当前用户加入 `docker` 组并重新登录：
-  - `sudo usermod -aG docker $USER && newgrp docker`
-- WSL(Ubuntu) 场景：需启用 systemd 或手动启动：
-  - 在 `/etc/wsl.conf` 中配置：
-    - `[boot]`
-    - `systemd=true`
-  - 在 Windows 执行 `wsl --shutdown` 后重开子系统；或临时运行 `sudo service docker start`。
+镜像使用多阶段构建，运行阶段不保留编译工具，以 `node` 用户运行。Linux 宿主机应预先创建目录并赋予 UID/GID 1000 写权限：
 
-4) 验证服务
-```
-curl -s http://127.0.0.1:3000/ -I
+```sh
+mkdir -p data backups
+sudo chown -R 1000:1000 data backups
 ```
 
-5) 验证管理员登录（示例）
-```
-TOKEN=$(curl -s -X POST http://127.0.0.1:3000/api/auth/login \
-  -H 'Content-Type: application/json' \
-  -d '{"username":"azumi-admin","password":"你的强密码"}' | jq -r .token)
+示例配置只将端口绑定到宿主机 `127.0.0.1`。对外部署可使用 Nginx 与 HTTPS，设置 `client_max_body_size` 时需考虑批量上传和备份大小；代理超时需覆盖备份耗时。验证服务请访问 `/healthz`，根路径返回 404。
 
-curl -s -H "Authorization: Bearer $TOKEN" http://127.0.0.1:3000/api/users | jq
-```
+Compose 限制日志轮转，停止服务时等待最长 35 秒。应用收到停止信号会停止接收新请求，等待已开始的任务并关闭数据库；超过 30 秒强制退出。请求总超时为 120 秒，备份下载的耗时仍受代理和客户端设置影响。
 
-## 目录与持久化
-- 宿主机 `./data` 映射到容器 `/app/data`（包含 `db.sqlite` 与 `uploads/`）
-- 宿主机 `./backups` 映射到容器 `/app/backups`
-- `.gitignore` 已忽略上述目录与 `.env`，确保数据与密钥不入仓库
+## 数据与恢复
 
-## 常用操作
-- 停止：`docker compose down`（不删除卷）
-- 停止并清理：`docker compose down -v`
-- 重启：`docker compose restart`
-- 进入容器：`docker compose exec app sh` 或 `bash`
+`data/db.sqlite`、`data/uploads` 为持久数据，`data/tmp` 用于暂存。SQLite 启用 WAL 和 FULL 同步；状态接口统计数据库、WAL 与 SHM 大小。不要只复制正在运行的 `db.sqlite`，应使用备份接口，或停止服务后整体复制数据目录。
 
-## 升级与回滚
-- 拉取最新代码后重建：
-```
-git pull
-docker compose build --no-cache
-docker compose up -d
-```
-- 回滚：保留旧镜像或使用 Git 标签回退代码后重新构建
+备份导出分页读取清单、流式打包图片，不把全部图片读入内存。图片已压缩，ZIP 内不再次压缩图片。备份或恢复期间暂停图片写入，繁忙返回 503，可稍后重试；单实例之外的进程不受这项锁控制。
 
-## 反向代理（可选）
-- 生产环境建议容器仅暴露到内网（例如宿主映射到 `127.0.0.1:8080`），对外通过 Nginx 暴露域名与 HTTPS。
-- Nginx 配置参考前文“反向代理与 HTTPS”。
+恢复兼容原有完整 `data.json + images/` 备份，校验结构、路径、CRC、图片、关联关系和解压大小后导入。用户名和标签名相同则复用当前记录并保留当前权限；重新映射用户、图片、标签编号。忽略备份里的旧绝对路径；同名同内容图片复用，同名不同内容另存，不覆盖现有图片。失败回滚数据库并清理本次新增文件，ZIP 临时文件在返回成功前删除。
 
-## 端口与IP设置（Docker）
-- 宿主机对外端口与IP通过 `.env` 控制：
-  - `HOST_IP`：绑定的宿主机 IP（默认 `0.0.0.0`，表示所有网卡；若仅本机访问，设为 `127.0.0.1`）
-  - `HOST_PORT`：对外端口（默认 `3000`）
-  - `APP_PORT`：容器内应用监听端口（默认 `8080`，与 Node 应用一致）
-- 端口映射关系：`HOST_IP:HOST_PORT -> 容器 APP_PORT`。例如：
-  - 对外开放：`HOST_IP=0.0.0.0`, `HOST_PORT=3000`, `APP_PORT=8080` → 外部访问 `http://<服务器IP>:3000/`
-  - 仅本机访问：`HOST_IP=127.0.0.1`, `HOST_PORT=3000`, `APP_PORT=8080` → 仅宿主访问 `http://127.0.0.1:3000/`
-- 如需更改对外端口，修改 `.env` 的 `HOST_PORT` 并重新 `docker compose up -d`。
+压缩目标是软目标：达到尝试上限后保留更小的结果，不保证一定小于 256KiB。多帧动画保留原内容以避免损坏动画；关闭压缩可保留原文件。公开地址返回的是存储内容，压缩开启时不是原始上传字节。
 
-## 注意事项
-- 管理员种子：仅当设置了 `ADMIN_PASSWORD` 且 `ADMIN_USERNAME` 在数据库中不存在时创建；不会覆盖已存在管理员密码。
-- 端口占用：若宿主端口已被占用，修改 `.env` 的 `HOST_PORT` 并重新 `docker compose up -d`。
-- 权限：确保宿主机 `./data` 与 `./backups` 对当前用户可读写。
+上传事务失败会清理新增文件。删除使用可恢复的暂存文件，重启时根据数据库恢复未提交的删除，或完成已提交的删除。掉电或强制终止仍可能产生孤立的上传/恢复文件；数据库与文件系统无法组成一个共同事务。启动清理超过一天的已知临时文件，不自动删除正式图片或缺失文件的记录。恢复前建议另存一份完整数据目录；定期将备份复制到其他设备。
 
-本应用为轻量化图床（JS/Node.js + SQLite），数据与图片存放在 `data/` 与 `backups/` 目录下，这些目录已通过 `.gitignore` 忽略，任何 git 操作均不会删除或覆盖其中的数据。
-
-## 环境准备
-- 安装 Node.js（建议 18+）
-- Windows 需在 PowerShell 下用 `cmd /c` 执行 npm，避免执行策略拦截
-
-## 快速部署步骤
-1. 在项目根目录初始化并安装依赖：
-   - Windows: `cmd /c "npm install"`
-   - Ubuntu: `npm install`
-2. 设置环境变量（至少管理员用户名、密码与端口）：
-   - Windows（临时会话）：`$env:ADMIN_USERNAME="admin"; $env:ADMIN_PASSWORD="你的强密码"; $env:PORT="8080"`
-   - Ubuntu（临时会话）：`export ADMIN_USERNAME="admin"; export ADMIN_PASSWORD="你的强密码"; export PORT=8080`
-3. 启动服务：
-   - Windows: `cmd /c "npm start"`
-   - Ubuntu: `npm start`
-4. 访问：`http://<服务器IP>:<端口>/`（API以 `/api/...` 形式）
-
-### 管理员初始化
-- 首次启动时，若设置了 `ADMIN_PASSWORD` 且不存在管理员用户，则自动创建用户名为 `ADMIN_USERNAME`（默认 `admin`）的管理员。
-
-## 目录说明
-- `data/uploads/`：用户上传或拉取的图片文件
-- `data/db.sqlite`：SQLite数据库文件
-- `backups/`：导出的备份zip将保存在这里
-
-## 跨平台说明
-- 本应用仅使用 Node.js 与 SQLite3，均可在 Windows 和 Ubuntu 运行
-- 通过 IP:PORT 直接访问，不需要配置域名或额外反向代理
-
-## 备份与恢复
-- 导出备份：管理员调用 `POST /api/admin/backup/export?download=true` 可直接下载ZIP
-- 导入备份：管理员上传ZIP至 `POST /api/admin/backup/import`（表单字段 `backupZip`）
+旧数据仍可读取，无需批量改写图片路径。旧版接受的非图片文件不会自动清除；新版本不再接受这些文件。新增索引在启动时自动创建，大图库首次启动可能需要较长时间。

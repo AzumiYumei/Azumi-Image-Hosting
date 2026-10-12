@@ -1,133 +1,41 @@
-# API 文档
+# API
 
-除图片获取接口外，其余返回均为 JSON。图片获取接口仅返回单张图片的二进制，并保留原始文件名与格式。需要认证的接口使用 `Authorization: Bearer <token>`。
+图片公开读取，写入和管理使用 `Authorization: Bearer <token>`。除取图/下载备份外均返回 JSON；错误返回 `{ "error": "说明" }`。令牌有效期七天，每次认证检查数据库中的用户状态和角色。
 
 ## 认证
-- `POST /api/auth/register`
-  - body: `{ "username": "u", "password": "p" }`
-  - 返回: `{ id, username }`
-  - curl 示例：
-    ```
-    curl -X POST http://<HOST>:<PORT>/api/auth/register \
-      -H 'Content-Type: application/json' \
-      -d '{"username":"user1","password":"pass123"}'
-    ```
-- `POST /api/auth/login`
-  - body: `{ "username": "u", "password": "p" }`
-  - 返回: `{ token }`
-  - curl 示例：
-    ```
-    curl -X POST http://<HOST>:<PORT>/api/auth/login \
-      -H 'Content-Type: application/json' \
-      -d '{"username":"user1","password":"pass123"}'
-    ```
+
+- `POST /api/auth/register`：`{ "username": "u", "password": "p" }`，返回 `{ id, username }`。注册可通过配置关闭。
+- `POST /api/auth/login`：同上，返回 `{ token }`。
+
+用户名最长 64 字符且不能有首尾空格；密码非空且最多 72 个 UTF-8 字节。频繁请求返回 429，认证并发达到上限返回 503。
 
 ## 图片
-- `POST /api/images/upload`（需认证）
-  - form-data: `files[]` 多文件, 可选 `tags`（逗号分隔或多值）
-  - 返回: `{ created: [{ id }, ...] }`
-  - curl 示例（多文件 + 多标签）：
-    ```
-    curl -X POST http://<HOST>:<PORT>/api/images/upload \
-      -H 'Authorization: Bearer <TOKEN>' \
-      -F 'files=@local1.png' \
-      -F 'files=@local2.jpg' \
-      -F 'tags=avatar;type=text/plain;charset=UTF-8' \
-      -F 'tags=test;type=text/plain;charset=UTF-8'
 
-    # 说明：
-    # - 服务端会自动尝试将标签规范化为 UTF-8，并修复常见乱码（例如未设置控制台为 UTF-8 导致出现 "Ã" 等伪字节）。
-    # - 在 Windows 的 CMD 建议先执行 chcp 65001，再运行上述命令；PowerShell 默认更友好但也建议显式 charset。
-    # - 压缩行为：当图片超过 256KB 时，服务端将自动压缩到不超过 256KB，且保留原格式与扩展名；可能降低质量或按比例缩放分辨率（最低宽度 64 像素）。
-    #   - JPEG：逐步降低质量（mozjpeg），必要时缩放。
-    #   - PNG：启用调色板并提高压缩级别。
-    #   - WebP/TIFF：降低质量或采用 JPEG 压缩（TIFF）。
-    #   - GIF：尝试缩放以减小体积，动画质量不保证。
-    #   - BMP：不进行压缩，保留原文件。
-    ```
-- `POST /api/images/upload-url`（需认证）
-  - body: `{ urls: ["http://...","..."], tags: ["tag1","tag2"] }`
-  - 返回: `{ created: [{ id } | { error }, ...] }`
-  - curl 示例：
-    ```
-    curl -X POST http://<HOST>:<PORT>/api/images/upload-url \
-      -H 'Authorization: Bearer <TOKEN>' \
-      -H 'Content-Type: application/json' \
-      -d '{"urls":["https://example.com/a.png","https://example.com/b.jpg"],"tags":["code","js"]}'
-    ```
-- `GET /api/images`
-  - 查询参数：`tags=tag1,tag2`（可选）、`random=true|false`
-  - 返回: 单张图片二进制（保留原始文件名与格式）
-  - curl 示例（随机获取并按原名保存）：
-    ```
-    curl -OJ "http://<HOST>:<PORT>/api/images?tags=avatar,test&random=true"
-    ```
-- `GET /api/images/:id/raw`
-  - 返回图片二进制（浏览器或图片查看器直接显示），保留原始文件名与格式
-  - curl 示例（按服务器提供的原始文件名保存到本地）：
-    ```
-    curl -OJ "http://<HOST>:<PORT>/api/images/123/raw"
-    ```
-- `DELETE /api/images/:id`（需认证）
-  - 普通用户只能删除自己的图片；管理员可删除任意图片
-  - curl 示例：
-    ```
-    curl -X DELETE "http://<HOST>:<PORT>/api/images/123" \
-      -H 'Authorization: Bearer <TOKEN>'
-    ```
+- `POST /api/images/upload`：multipart 字段 `files`（可重复），`tags`（逗号/中文逗号分隔或多值）。返回 `{ created: [{ id }] }`。默认最多 20 张，每张 20MiB；按实际内容校验格式、像素、帧数，扩展名和 MIME 使用检测结果。整批先校验图片；后续保存发生运行错误时，先前已成功保存的图片仍保留。
+- `POST /api/images/upload-url`：`{ urls: ["https://..."], tags: ["标签"] }`。返回 `{ created: [{ id } | { error }] }`，单张下载错误不会影响其他 URL。仅允许公网 HTTP/HTTPS。
+- `GET /api/images?tags=标签1,标签2&random=false`：返回最新的一张匹配图片。多个标签按“任一标签匹配”处理；可设 `random=true`。随机查找最多 32 个候选，最新查找最多 512 个候选；缺失文件过多时可能返回 404，需要管理员检查数据目录。
+- `GET /api/images/:id/raw`：返回指定图片；支持 `Last-Modified` 条件请求、范围请求和一小时缓存。最新/随机地址使用 `no-cache`，保留每次重新选择图片的行为。
+- `DELETE /api/images/:id`：需认证；所有者或管理员可删除，返回 `{ deleted: id }`。
 
-## 标签
-- `GET /api/tags`
-  - 返回: `{ tags: [{ id, name }, ...] }`
-  - curl 示例：
-    ```
-    curl "http://<HOST>:<PORT>/api/tags"
-    ```
+支持 Sharp 可解码的 JPEG、PNG、WebP、GIF、TIFF、AVIF/HEIF 等格式；不接受 SVG 或任意文本。格式支持取决于运行环境的解码能力。可配置压缩目标和尝试次数；动画不自动压缩，详情参见部署说明。读取缺失文件返回 404，不删除数据库记录。
 
-## 管理员
-- `GET /api/users`（需管理员）
-  - 返回: `{ users: [{ id, username, role, status, created_at }, ...] }`
-  - curl 示例：
-    ```
-    curl -H 'Authorization: Bearer <TOKEN>' "http://<HOST>:<PORT>/api/users"
-    ```
-- `PATCH /api/users/:id/status`（需管理员）
-  - body: `{ status: "active" | "disabled" }`
-  - 返回: `{ id, status }`
-  - curl 示例（禁用用户）：
-    ```
-    curl -X PATCH "http://<HOST>:<PORT>/api/users/2/status" \
-      -H 'Authorization: Bearer <TOKEN>' \
-      -H 'Content-Type: application/json' \
-      -d '{"status":"disabled"}'
-    ```
-- `GET /api/admin/status/db`（需管理员）
-  - 返回: `{ users, images, tags, dbFileSizeBytes, dbPath }`
-  - curl 示例：
-    ```
-    curl -H 'Authorization: Bearer <TOKEN>' "http://<HOST>:<PORT>/api/admin/status/db"
-    ```
-- `POST /api/admin/backup/export?download=true`（需管理员）
-  - 返回: 下载ZIP（包含 `data.json` 与 `images/`）或 `{ backupZip: "/绝对路径" }`
-  - curl 示例（下载备份到本地）：
-    ```
-    curl -H 'Authorization: Bearer <TOKEN>' \
-      -X POST "http://<HOST>:<PORT>/api/admin/backup/export?download=true" \
-      -o backup.zip
-    ```
-- `POST /api/admin/backup/import`（需管理员）
-  - form-data: `backupZip`（ZIP文件）
-  - 返回: `{ imported: true }`
-  - curl 示例（上传备份ZIP）：
-    ```
-    curl -H 'Authorization: Bearer <TOKEN>' \
-      -X POST -F "backupZip=@backup.zip" \
-      "http://<HOST>:<PORT>/api/admin/backup/import"
-    ```
+## 标签与用户
 
-### 管理员登录说明
-- 管理员用户名可通过环境变量 `ADMIN_USERNAME` 配置（默认 `admin`），密码通过 `ADMIN_PASSWORD` 配置；首次启动时自动创建该管理员账号。
+- `GET /api/tags?after=0&limit=100`：返回 `{ tags: [{id,name}], nextAfter }`。
+- `GET /api/users?after=0&limit=100`：管理员接口，返回 `{ users: [{id,username,role,status,created_at}], nextAfter }`。
+- `PATCH /api/users/:id/status`：管理员接口，body `{ status: "active" | "disabled" }`。不能禁用当前管理员；用户禁用后旧令牌立即失效。
 
-## 备注
-- 任何 git 操作不会影响 `data/` 与 `backups/` 的数据，这些目录已被 `.gitignore` 忽略。
-- 随机与标签检索均基于数据库实现，可组合使用。
+列表按编号递增分页，默认 100，最多 200 条。将 `nextAfter` 作为下次 `after`，直到返回 null；恰好达到页大小时可能有一个额外空页。
+
+## 状态与备份
+
+- `GET /healthz`：数据库可用时返回 `{ status: "ok" }`，不需认证。
+- `GET /api/admin/status/db`：管理员接口，返回 `{ users, images, tags, dbFileSizeBytes, dbTotalSizeBytes }`；总大小包含 WAL 和 SHM。
+- `POST /api/admin/backup/export`：管理员接口，返回 `{ backupZip }`；加 `?download=true` 下载 ZIP。默认只保留最近三份自动生成的备份。
+- `POST /api/admin/backup/import`：管理员接口，multipart 单字段 `backupZip`，返回 `{ imported: true, counts: { users, images, tags } }`。
+
+图片写入与备份资源繁忙时返回 503，并附带 `Retry-After: 5`。上传大小超过限制返回 413，文件、字段、数量或备份校验错误返回 400。Docker 健康检查访问 `/healthz`，根路径没有页面。
+
+## 升级变化
+
+生产环境必须配置安全密钥；标签/用户列表增加分页；默认关闭浏览器跨域访问，需要配置 `CORS_ORIGINS`；默认上传批量上限从 50 改为 20，可配置回 50。旧令牌使用旧密钥时会失效。备份仍使用 ZIP，旧版服务不保证支持新版本清单；升级前保留旧备份。

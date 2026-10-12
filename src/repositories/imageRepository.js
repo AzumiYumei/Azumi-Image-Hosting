@@ -1,87 +1,34 @@
-// ================================================================
-// Copyright (c) 2025 AZUMI 图片数据访问
-// 
-// 文件名称: ImageRepository.js
-// 作者: AzumiYumeichi
-// 创建日期: 2025-11-06
-// 版本: 1.0
-// 
-// 描述: 封装图片数据的增删查与标签关联逻辑，并提供按标签检索、
-//       随机获取图片的接口。
-// 
-// 修改历史:
-// 2025-11-06 - 初始版本
-// ================================================================
 const { Database } = require('../db/sqlite');
 
 class ImageRepository {
-  /** 方法：创建图片记录并返回ID */
   static async CreateImage({ ownerId, filename, originalName, mimeType, size, storagePath, remoteUrl }) {
-    const db = Database.Get();
-    const now = new Date().toISOString();
-    const res = await db.Run(
-      `INSERT INTO images (owner_id, filename, original_name, mime_type, size, storage_path, remote_url, created_at)
-       VALUES (?,?,?,?,?,?,?,?)`,
-      [ownerId || null, filename, originalName || null, mimeType || null, size || 0, storagePath, remoteUrl || null, now]
-    );
-    return res.lastID;
+    const result = await Database.Get().Run(`INSERT INTO images
+      (owner_id, filename, original_name, mime_type, size, storage_path, remote_url, created_at)
+      VALUES (?,?,?,?,?,?,?,?)`, [ownerId || null, filename, originalName || null, mimeType, size, storagePath, remoteUrl || null, new Date().toISOString()]);
+    return result.lastID;
   }
 
-  /** 方法：为图片关联标签 */
   static async AttachTags(imageId, tagIds = []) {
-    const db = Database.Get();
-    for (const tagId of tagIds) {
-      await db.Run('INSERT OR IGNORE INTO image_tags (image_id, tag_id) VALUES (?,?)', [imageId, tagId]);
-    }
+    for (const id of tagIds) await Database.Get().Run('INSERT OR IGNORE INTO image_tags (image_id,tag_id) VALUES (?,?)', [imageId, id]);
   }
 
-  /** 方法：根据ID获取图片 */
-  static async GetImageById(id) {
-    const db = Database.Get();
-    return await db.Get('SELECT * FROM images WHERE id = ?', [id]);
+  static GetImageById(id) { return Database.Get().Get('SELECT * FROM images WHERE id=?', [id]); }
+  static DeleteImage(id) { return Database.Get().Run('DELETE FROM images WHERE id=?', [id]); }
+
+  // 标签反向索引先找图片编号，再按编号取有限记录。
+  static Filter(tags = []) {
+    return tags.length ? ` AND id IN (SELECT it.image_id FROM image_tags it
+      JOIN tags t ON t.id=it.tag_id WHERE t.name IN (${tags.map(() => '?').join(',')}))` : '';
   }
 
-  /** 方法：删除图片 */
-  static async DeleteImage(id) {
-    const db = Database.Get();
-    await db.Run('DELETE FROM images WHERE id = ?', [id]);
+  static ListImagesByTags(tags = [], before = Number.MAX_SAFE_INTEGER, limit = 32) {
+    return Database.Get().All(`SELECT * FROM images WHERE id < ?${this.Filter(tags)} ORDER BY id DESC LIMIT ?`, [before, ...tags, limit]);
   }
 
-  /** 方法：列出图片（可选标签过滤） */
-  static async ListImagesByTags(tagNames = []) {
-    const db = Database.Get();
-    if (!tagNames || tagNames.length === 0) {
-      return await db.All('SELECT * FROM images ORDER BY id DESC');
-    }
-    const placeholders = tagNames.map(() => '?').join(',');
-    return await db.All(
-      `SELECT DISTINCT i.* FROM images i
-       JOIN image_tags it ON i.id = it.image_id
-       JOIN tags t ON t.id = it.tag_id
-       WHERE t.name IN (${placeholders})
-       ORDER BY i.id DESC`,
-      tagNames
-    );
-  }
-
-  /** 方法：随机获取图片（可选择标签过滤与数量限制） */
-  static async RandomImages(tagNames = [], count = 1) {
-    const db = Database.Get();
-    let rows;
-    if (!tagNames || tagNames.length === 0) {
-      rows = await db.All('SELECT * FROM images ORDER BY RANDOM() LIMIT ?', [count]);
-    } else {
-      const placeholders = tagNames.map(() => '?').join(',');
-      rows = await db.All(
-        `SELECT DISTINCT i.* FROM images i
-         JOIN image_tags it ON i.id = it.image_id
-         JOIN tags t ON t.id = it.tag_id
-         WHERE t.name IN (${placeholders})
-         ORDER BY RANDOM() LIMIT ?`,
-        [...tagNames, count]
-      );
-    }
-    return rows;
+  static RandomImages(tags = [], count = 1) {
+    // 只随机排序编号，避免排序完整图片记录；保持等概率选择和标签语义。
+    return Database.Get().All(`SELECT * FROM images WHERE id IN
+      (SELECT id FROM images WHERE 1=1${this.Filter(tags)} ORDER BY RANDOM() LIMIT ?) ORDER BY RANDOM()`, [...tags, count]);
   }
 }
 

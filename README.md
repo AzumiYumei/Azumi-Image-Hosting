@@ -1,20 +1,25 @@
 # Azumi Image Host
 
-一个简洁轻量的图片托管服务，面向个人与团队的图片存储与分发场景。支持本地与 URL 批量上传、标签管理、查看原图、以及管理员备份与恢复；兼容跨平台运行（Windows/Ubuntu）。
+轻量图片托管 API：单个 Node.js 24 LTS 服务、SQLite 数据库和本地文件存储，支持 Windows、Linux 与 Docker。
 
-## 项目概览
-- 轻量部署：仅依赖 Node.js 与 SQLite3，开箱即用。
-- 多源上传：支持本地文件与 URL 批量上传，便于整理与汇集素材。
-- 标签管理：便捷的标签归类与检索能力，提升图片组织效率。
-- 原图访问：保留原始文件名与格式，便于直接浏览与下载。
-- 管理功能：支持用户管理与数据备份/恢复，适合小型私有部署。
+支持本地/URL 批量上传、标签、随机与最新图片、用户管理、流式 ZIP 备份恢复。上传、压缩与下载均设有资源上限；读取缺失图片不会删除记录。
 
-## 快速开始
-- 安装依赖：`npm install`
-- 启动服务：`npm start`
-- 更多用法与接口说明：参见 `docs/api.md` 与 `docs/deployment.md`
+## 开始使用
 
-## 运行环境
-- Node.js（推荐 LTS）
-- Windows 11 或 Ubuntu 22.04+ 均可运行 查看部署文档
-- 默认使用本地目录进行数据与图片存储（已通过 `.gitignore` 排除）
+```sh
+npm ci
+npm start
+```
+
+默认监听 `3000`，健康检查为 `/healthz`。项目提供 API，没有首页界面。开发环境未设置密钥时，在 `data/.jwt-secret` 保存随机密钥；生产环境必须提供至少 32 字节的随机 `JWT_SECRET`。
+
+生产部署前参考 [.env.example](.env.example)、[部署说明](docs/deployment.md) 和 [接口说明](docs/api.md)。直接运行时 `.env` 不会自动加载，可使用 `node --env-file=.env src/app/server.js`；Docker Compose 自动读取 `.env`。
+
+## 验证
+
+```sh
+npm test
+npm audit
+```
+
+测试使用独立临时目录和数据库，不操作实际图片。支持单实例部署；不要让多个进程同时操作同一数据目录。图片公开可读，上传与管理需要登录。

@@ -13,20 +13,25 @@
 // 2025-11-06 - 初始版本
 // ================================================================
 const sqlite3 = require('sqlite3');
-const path = require('path');
+const { AsyncLocalStorage } = require('node:async_hooks');
 const { Config } = require('../config');
 
 class Database {
   /** 构造函数：初始化数据库连接路径 */
-  constructor() {
+  constructor(filename) {
     /** @type {sqlite3.Database|null} */ this.m_Db = null;
-    /** @type {string} */ this.m_DbPath = Config.Get().m_DbFile;
+    /** @type {string} */ this.m_DbPath = filename || Config.Get().m_DbFile;
+    this.m_Queue = Promise.resolve();
+    this.m_Context = new AsyncLocalStorage();
   }
 
   /** 方法：初始化数据库（创建连接、表结构、外键） */
   async Init() {
     await this.Open();
     await this.Run('PRAGMA foreign_keys = ON;');
+    await this.Run('PRAGMA journal_mode = WAL;');
+    await this.Run('PRAGMA synchronous = FULL;');
+    await this.Run('PRAGMA busy_timeout = 5000;');
     await this.Run(`CREATE TABLE IF NOT EXISTS users (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       username TEXT UNIQUE NOT NULL,
@@ -58,14 +63,17 @@ class Database {
       FOREIGN KEY(image_id) REFERENCES images(id) ON DELETE CASCADE,
       FOREIGN KEY(tag_id) REFERENCES tags(id) ON DELETE CASCADE
     );`);
+    await this.Run('CREATE INDEX IF NOT EXISTS idx_image_tags_tag ON image_tags(tag_id, image_id)');
+    await this.Run('CREATE INDEX IF NOT EXISTS idx_images_filename ON images(filename)');
+    await this.Run('PRAGMA optimize;');
   }
 
   /** 方法：打开数据库连接 */
-  Open() {
+  Open(mode = sqlite3.OPEN_READWRITE | sqlite3.OPEN_CREATE) {
     return new Promise((resolve, reject) => {
       if (this.m_Db) return resolve();
-      const sqlite = sqlite3.verbose();
-      this.m_Db = new sqlite.Database(this.m_DbPath, (err) => {
+      const sqlite = sqlite3;
+      this.m_Db = new sqlite.Database(this.m_DbPath, mode, (err) => {
         if (err) return reject(err);
         resolve();
       });
@@ -74,44 +82,75 @@ class Database {
 
   /** 方法：执行写入/更新SQL */
   Run(sql, params = []) {
-    return new Promise((resolve, reject) => {
+    return this.Schedule(() => new Promise((resolve, reject) => {
       this.m_Db.run(sql, params, function (err) {
         if (err) return reject(err);
         resolve({ lastID: this.lastID, changes: this.changes });
       });
-    });
+    }));
   }
 
   /** 方法：查询单行SQL */
   Get(sql, params = []) {
-    return new Promise((resolve, reject) => {
+    return this.Schedule(() => new Promise((resolve, reject) => {
       this.m_Db.get(sql, params, function (err, row) {
         if (err) return reject(err);
         resolve(row);
       });
-    });
+    }));
   }
 
   /** 方法：查询多行SQL */
   All(sql, params = []) {
-    return new Promise((resolve, reject) => {
+    return this.Schedule(() => new Promise((resolve, reject) => {
       this.m_Db.all(sql, params, function (err, rows) {
         if (err) return reject(err);
         resolve(rows);
       });
-    });
+    }));
+  }
+
+  // 单连接事务独占队列，防止其他请求的写入混进事务或被一起回滚。
+  Schedule(operation) {
+    if (this.m_Context.getStore() === this) return operation();
+    const result = this.m_Queue.then(operation);
+    this.m_Queue = result.catch(() => {});
+    return result;
+  }
+
+  Transaction(operation, readOnly = false) {
+    if (this.m_Context.getStore() === this) return operation(this);
+    return this.Schedule(() => this.m_Context.run(this, async () => {
+      await this.Run(readOnly ? 'BEGIN' : 'BEGIN IMMEDIATE');
+      try {
+        const result = await operation(this);
+        await this.Run('COMMIT');
+        return result;
+      } catch (err) {
+        await this.Run('ROLLBACK');
+        throw err;
+      }
+    }));
+  }
+
+  // 备份用独立只读连接取得一致快照，避免清单写盘阻塞正常查询和认证。
+  async ReadSnapshot(operation) {
+    const snapshot = new Database(this.m_DbPath);
+    await snapshot.Open(sqlite3.OPEN_READONLY);
+    try { return await snapshot.Transaction(operation, true); }
+    finally { await snapshot.Close(); }
   }
 
   /** 方法：关闭数据库连接 */
   Close() {
-    return new Promise((resolve, reject) => {
+    return this.Schedule(() => new Promise((resolve, reject) => {
       if (!this.m_Db) return resolve();
       this.m_Db.close((err) => {
         if (err) return reject(err);
         this.m_Db = null;
         resolve();
       });
-    });
+    }));
   }
 
   /** 方法：获取单例 */

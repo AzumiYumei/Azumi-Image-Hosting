@@ -24,3 +24,10 @@ services:
       - ./data:/app/data
       - ./backups:/app/backups
     restart: unless-stopped
+    init: true
+    stop_grace_period: 35s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
