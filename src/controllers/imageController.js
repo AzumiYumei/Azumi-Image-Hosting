@@ -8,6 +8,7 @@ const { TagRepository } = require('../repositories/tagRepository');
 const { ImageRepository } = require('../repositories/imageRepository');
 const { download } = require('../utils/download');
 const { error, imagePath } = require('../utils/resources');
+const { hashImage } = require('../utils/imageHash');
 
 const formats = { jpeg: ['.jpg', 'image/jpeg'], png: ['.png', 'image/png'], webp: ['.webp', 'image/webp'], gif: ['.gif', 'image/gif'], tiff: ['.tiff', 'image/tiff'], avif: ['.avif', 'image/avif'], heif: ['.heif', 'image/heif'], bmp: ['.bmp', 'image/bmp'] };
 
@@ -98,21 +99,30 @@ class ImageController {
 
   static async Save(filePath, originalName, ownerId, tags, remoteUrl = null, meta) {
     meta ||= await this.Inspect(filePath);
+    const sourceHash = await hashImage(filePath);
+    const result = image => ({ id: image.id, accessToken: image.access_token, url: `/api/images/${image.access_token}`, duplicate: true });
+    const existing = await ImageRepository.FindDuplicate(sourceHash);
+    if (existing) return result(existing);
     const compressed = await this.EnsureMaxSize(filePath, Config.Get().m_CompressBytes, meta);
+    const contentHash = compressed.changed ? await hashImage(filePath) : sourceHash;
     const [ext, mimeType] = formats[meta.format];
     const filename = `${randomUUID()}${ext}`;
     const finalPath = path.join(Config.Get().m_UploadsDir, filename);
     const accessToken = randomBytes(16).toString('hex');
-    await fsp.rename(filePath, finalPath);
+    let installed = false;
     try {
-      const id = await Database.Get().Transaction(async () => {
+      return await Database.Get().Transaction(async () => {
+        // 事务内再次查重，避免并发请求在首次查询后各自保存同一图片。
+        const duplicate = await ImageRepository.FindDuplicate(sourceHash, contentHash);
+        if (duplicate) return result(duplicate);
+        await fsp.rename(filePath, finalPath);
+        installed = true;
         const tagIds = await TagRepository.EnsureTags(tags);
-        const id = await ImageRepository.CreateImage({ ownerId, filename, originalName: this.SanitizeName(originalName), mimeType, size: compressed.newSize, storagePath: filename, remoteUrl, accessToken });
+        const id = await ImageRepository.CreateImage({ ownerId, filename, originalName: this.SanitizeName(originalName), mimeType, size: compressed.newSize, storagePath: filename, remoteUrl, accessToken, sourceHash, contentHash });
         await ImageRepository.AttachTags(id, tagIds);
-        return id;
+        return { id, accessToken, url: `/api/images/${accessToken}`, duplicate: false };
       });
-      return { id, accessToken, url: `/api/images/${accessToken}` };
-    } catch (err) { await fsp.rm(finalPath, { force: true }); throw err; }
+    } catch (err) { if (installed) await fsp.rm(finalPath, { force: true }); throw err; }
   }
 
   static async UploadLocal(req, res) {

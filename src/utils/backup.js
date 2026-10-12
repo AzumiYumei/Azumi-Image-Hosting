@@ -166,6 +166,7 @@ function validate(data) {
   const accessTokens = new Set();
   for (const image of data.images) {
     safeName(image.filename);
+    if (image.source_hash != null && !/^[0-9a-f]{64}$/.test(image.source_hash)) throw error(400, '备份图片原始摘要无效');
     if (filenames.has(image.filename.toLowerCase()) || (image.owner_id != null && !sets.users.has(image.owner_id))) throw error(400, '备份图片记录无效');
     filenames.add(image.filename.toLowerCase());
     if (image.access_token != null) {
@@ -230,8 +231,10 @@ async function importBackup(source) {
         const existing = await db.Get('SELECT * FROM images WHERE filename=?', [image.filename]);
         if (existing) {
           try {
-            if (await hash(await imagePath(existing)) === await hash(staged)) {
+            const contentHash = await hash(staged);
+            if (await hash(await imagePath(existing)) === contentHash) {
               if (image.access_token && image.access_token !== existing.access_token) throw error(409, '同名图片访问令牌不同，无法保留原链接');
+              await db.Run('UPDATE images SET content_hash=?,source_hash=COALESCE(source_hash,?) WHERE id=?', [contentHash, image.source_hash || null, existing.id]);
               images.set(image.id, existing.id); continue;
             }
           } catch (err) { if (err.code !== 'ENOENT') throw err; }
@@ -252,8 +255,10 @@ async function importBackup(source) {
         if (accessToken != null && !/^[0-9a-f]{32}$/.test(accessToken)) throw error(400, '备份访问令牌无效');
         if (accessToken && await db.Get('SELECT id FROM images WHERE access_token=?', [accessToken])) throw error(409, '备份图片访问令牌与现有图片冲突');
         accessToken ||= randomUUID().replaceAll('-', '');
-        const result = await db.Run(`INSERT INTO images(owner_id,filename,original_name,mime_type,size,storage_path,remote_url,access_token,created_at)
-          VALUES(?,?,?,?,?,?,?,?,?)`, [users.get(image.owner_id) || null, filename, String(image.original_name || filename), `image/${metadata.get(image.id).format}`, size, filename, typeof image.remote_url === 'string' ? image.remote_url : null, accessToken, String(image.created_at || new Date().toISOString())]);
+        // 存储摘要从实际恢复文件计算，原始摘要随备份保留以兼容压缩前的重复上传。
+        const contentHash = await hash(staged);
+        const result = await db.Run(`INSERT INTO images(owner_id,filename,original_name,mime_type,size,storage_path,remote_url,access_token,source_hash,content_hash,created_at)
+          VALUES(?,?,?,?,?,?,?,?,?,?,?)`, [users.get(image.owner_id) || null, filename, String(image.original_name || filename), `image/${metadata.get(image.id).format}`, size, filename, typeof image.remote_url === 'string' ? image.remote_url : null, accessToken, image.source_hash || null, contentHash, String(image.created_at || new Date().toISOString())]);
         images.set(image.id, result.lastID); counts.images++;
       }
       for (const relation of data.imageTags) await db.Run('INSERT OR IGNORE INTO image_tags(image_id,tag_id) VALUES(?,?)', [images.get(relation.image_id), tags.get(relation.tag_id)]);

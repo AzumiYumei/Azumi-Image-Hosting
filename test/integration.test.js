@@ -122,6 +122,106 @@ test('拒绝非图片、超限文件及批量非法文件，清理临时文件',
   assert.equal(runtime.gate.active, 0);
 });
 
+test('相同内容跨文件名、用户和批次复用链接，不修改归属与标签', async () => {
+  const first = (await (await upload(png, 'first.png', '原标签')).json()).created[0];
+  assert.equal(first.duplicate, false);
+  const second = (await (await upload(png, 'renamed.jpg', '新标签', admin)).json()).created[0];
+  assert.deepEqual(second, { ...first, duplicate: true });
+  const row = await ImageRepository.GetImageById(first.id);
+  assert.equal(row.owner_id, 2);
+  assert.equal(row.original_name, 'first.png');
+  assert.equal((await ImageRepository.GalleryImages())[0].tags, '原标签');
+  assert.equal((await db.Get('SELECT COUNT(*) AS c FROM tags')).c, 1);
+  const form = new FormData();
+  form.append('files', new Blob([png]), 'a.png');
+  form.append('files', new Blob([png]), 'b.png');
+  const response = await fetch(`${base}/api/images/upload`, { method: 'POST', headers: auth(user), body: form });
+  const result = await response.json();
+  assert.ok(result.created.every(image => image.id === first.id && image.duplicate));
+  assert.deepEqual(result.images, result.created);
+  assert.equal((await db.Get('SELECT COUNT(*) AS c FROM images')).c, 1);
+  assert.equal((await fsp.readdir(cfg.m_UploadsDir)).length, 1);
+  assert.deepEqual(await fsp.readdir(cfg.m_TempDir), []);
+});
+
+test('同批首次上传和并发上传只保存一张重复图片', async () => {
+  const form = new FormData();
+  for (const name of ['a.png', 'b.png']) form.append('files', new Blob([png]), name);
+  const results = (await (await fetch(`${base}/api/images/upload`, { method: 'POST', headers: auth(user), body: form })).json()).created;
+  assert.equal(results[0].duplicate, false); assert.equal(results[1].duplicate, true);
+  assert.equal(results[0].id, results[1].id);
+  const row = await ImageRepository.GetImageById(results[0].id);
+  await ImageRepository.DeleteImage(results[0].id);
+  await fsp.unlink(path.join(cfg.m_UploadsDir, row.filename));
+  const responses = await Promise.all([upload(), upload()]);
+  assert.ok(responses.every(response => response.status === 200));
+  const concurrent = await Promise.all(responses.map(async response => (await response.json()).created[0]));
+  assert.equal(concurrent[0].id, concurrent[1].id);
+  assert.equal(concurrent.filter(image => image.duplicate).length, 1);
+  assert.equal((await db.Get('SELECT COUNT(*) AS c FROM images')).c, 1);
+  assert.equal((await fsp.readdir(cfg.m_UploadsDir)).length, 1);
+  assert.deepEqual(await fsp.readdir(cfg.m_TempDir), []);
+});
+
+test('压缩原文件和存储文件均可查重，备份恢复后仍复用原链接', async () => {
+  const source = await sharp(randomBytes(128 * 128 * 3), { raw: { width: 128, height: 128, channels: 3 } }).png().toBuffer();
+  const previous = cfg.m_CompressBytes; cfg.m_CompressBytes = 1024;
+  try {
+    const first = (await (await upload(source)).json()).created[0];
+    const row = await ImageRepository.GetImageById(first.id);
+    assert.notEqual(row.source_hash, row.content_hash);
+    const stored = await fsp.readFile(path.join(cfg.m_UploadsDir, row.filename));
+    for (const content of [source, stored]) {
+      const duplicate = (await (await upload(content)).json()).created[0];
+      assert.equal(duplicate.id, first.id); assert.equal(duplicate.duplicate, true);
+    }
+    const backup = await exportBackup();
+    await ImageRepository.DeleteImage(first.id);
+    await fsp.unlink(path.join(cfg.m_UploadsDir, row.filename));
+    await importBackup(backup);
+    const restored = (await (await upload(source)).json()).created[0];
+    assert.equal(restored.duplicate, true); assert.equal(restored.url, first.url);
+    assert.equal((await db.Get('SELECT COUNT(*) AS c FROM images')).c, 1);
+  } finally { cfg.m_CompressBytes = previous; }
+});
+
+test('旧图片补齐摘要、旧备份恢复后查重，缺失文件和删除后可重新上传', async () => {
+  await importBackup(await zipFile(fixture(), { 'restored.png': png }));
+  const existing = await db.Get('SELECT * FROM images');
+  await db.Run('UPDATE images SET source_hash=NULL,content_hash=NULL');
+  await ImageRepository.BackfillHashes(); await ImageRepository.BackfillHashes();
+  const duplicate = (await (await upload()).json()).created[0];
+  assert.equal(duplicate.id, existing.id); assert.equal(duplicate.duplicate, true);
+  await fsp.unlink(path.join(cfg.m_UploadsDir, existing.filename));
+  const replacement = (await (await upload()).json()).created[0];
+  assert.equal(replacement.duplicate, false); assert.notEqual(replacement.id, existing.id);
+  assert.ok(await ImageRepository.GetImageById(existing.id));
+  assert.equal((await fetch(`${base}/api/images/${replacement.id}`, { method: 'DELETE', headers: auth(user) })).status, 200);
+  assert.equal((await (await upload()).json()).created[0].duplicate, false);
+  assert.deepEqual(await fsp.readdir(cfg.m_TempDir), []);
+});
+
+test('URL 下载与本地上传按内容查重，URL 单项错误仍被报告', async () => {
+  const dns = require('node:dns/promises');
+  const axios = require('axios');
+  const { Readable } = require('node:stream');
+  const oldLookup = dns.lookup; const oldGet = axios.get;
+  dns.lookup = async hostname => [{ address: hostname === '127.0.0.1' ? '127.0.0.1' : '8.8.8.8', family: 4 }];
+  axios.get = async () => ({ status: 200, headers: {}, data: Readable.from([png]) });
+  try {
+    const response = await fetch(`${base}/api/images/upload-url`, { method: 'POST', headers: { ...auth(user), 'Content-Type': 'application/json' }, body: JSON.stringify({ urls: ['https://images.example/a.png', 'https://other.example/b.png', 'http://127.0.0.1/private'] }) });
+    assert.equal(response.status, 200);
+    const result = await response.json();
+    assert.equal(result.created[0].duplicate, false); assert.equal(result.created[1].duplicate, true);
+    assert.equal(result.created[0].id, result.created[1].id);
+    assert.match(result.created[2].error, /禁止/); assert.equal(result.images.length, 2);
+    assert.equal((await (await upload()).json()).created[0].duplicate, true);
+    assert.equal((await db.Get('SELECT COUNT(*) AS c FROM images')).c, 1);
+    assert.equal((await fsp.readdir(cfg.m_UploadsDir)).length, 1);
+    assert.deepEqual(await fsp.readdir(cfg.m_TempDir), []);
+  } finally { dns.lookup = oldLookup; axios.get = oldGet; }
+});
+
 test('立即禁用旧令牌，角色使用当前数据库值，拒绝默认密钥伪造', async () => {
   const loggedIn = await fetch(`${base}/api/auth/login`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username: 'admin', password: 'test-password' }) });
   const session = await loggedIn.json(); assert.equal(session.isAdmin, true); assert.equal(session.username, 'admin');
@@ -362,7 +462,8 @@ test('GitHub 管理页面、上传返回、令牌链接、模糊搜索与分页�
   const result = await response.json(); assert.deepEqual(result.images, result.created);
   const image = result.images[0]; assert.match(image.accessToken, /^[0-9a-f]{32}$/);
   const tokenResponse = await fetch(`${base}${image.url}`); assert.equal(tokenResponse.status, 200); assert.deepEqual(Buffer.from(await tokenResponse.arrayBuffer()), png);
-  await upload(png, 'two.png', 'Avatar-测试');
+  const secondPng = await sharp({ create: { width: 32, height: 32, channels: 4, background: '#00ff0080' } }).png().toBuffer();
+  await upload(secondPng, 'two.png', 'Avatar-测试');
   const first = await (await fetch(`${base}/api/images/list?search=avatar&limit=1`)).json();
   assert.equal(first.images.length, 1); assert.ok(first.nextBefore); assert.equal(first.images[0].tags, 'Avatar-测试');
   const next = await (await fetch(`${base}/api/images/list?search=avatar&limit=1&before=${first.nextBefore}`)).json();
@@ -395,6 +496,12 @@ test('GitHub 自动迁移无令牌列的旧数据库并保持链接稳定', asyn
     await legacy.Run("INSERT INTO images(id,filename,storage_path,created_at) VALUES(1,'legacy.png','legacy.png','2026-01-01')");
     await legacy.Init();
     const first = await legacy.Get('SELECT access_token FROM images WHERE id=1'); assert.match(first.access_token, /^[0-9a-f]{32}$/);
+    const columns = await legacy.All('PRAGMA table_info(images)');
+    assert.ok(columns.some(column => column.name === 'source_hash'));
+    assert.ok(columns.some(column => column.name === 'content_hash'));
+    const indexes = await legacy.All('PRAGMA index_list(images)');
+    assert.ok(indexes.some(index => index.name === 'idx_images_source_hash'));
+    assert.ok(indexes.some(index => index.name === 'idx_images_content_hash'));
     await legacy.Init(); assert.equal((await legacy.Get('SELECT access_token FROM images WHERE id=1')).access_token, first.access_token);
   } finally { await legacy.Close(); }
 });

@@ -16,7 +16,9 @@ GitHub 管理页面位于 `/`，登录页面位于 `/login.html`。保留以下�
 - `GET /api/images/list?search=关键词&before=编号&limit=50`：JSON 图片列表，返回 `{ images: [{ id, filename, tags, url, created_at }], nextBefore }`。支持标签模糊搜索，也可使用 `tags` 参数；默认 50、最多 100 条，编号倒序游标分页。
 - `GET /api/images/:token`：通过 32 位十六进制令牌返回图片，已有链接保持可用。支持缓存验证和范围请求。
 
-上传同时返回 `created` 与兼容管理页面的 `images` 字段，成功项包含 `{ id, accessToken, url }`；URL 的失败项在 `created` 中报告，`images` 只包含成功项。
+上传同时返回 `created` 与兼容管理页面的 `images` 字段，成功项包含 `{ id, accessToken, url, duplicate }`；URL 的失败项在 `created` 中报告，`images` 只包含成功项。`created` 为兼容字段名，包含新增和复用结果，并非全为新记录。
+
+本地与 URL 上传默认进行全图库 SHA-256 内容查重。`duplicate: false` 表示新增；`duplicate: true` 表示复用已有图片的编号、令牌和链接，不新增文件，也不修改所有者或标签。文件名和来源 URL 不参与判断。同批次、并发上传以及原文件与其压缩后的存储文件均参与查重；仅视觉相似但字节不同的图片不会直接判为重复。旧图库启动时自动补齐存储摘要，旧图片压缩前的原始摘要无法恢复。备份保留新图片的原始摘要，恢复时重新计算存储摘要。
 
 - `POST /api/images/upload`：multipart 字段 `files`（可重复），`tags`（逗号/中文逗号分隔或多值）。返回 `{ created: [{ id }] }`。默认最多 20 张，每张 20MiB；按实际内容校验格式、像素、帧数，扩展名和 MIME 使用检测结果。整批先校验图片；后续保存发生运行错误时，先前已成功保存的图片仍保留。
 - `POST /api/images/upload-url`：`{ urls: ["https://..."], tags: ["标签"] }`。返回 `{ created: [{ id } | { error }] }`，单张下载错误不会影响其他 URL。仅允许公网 HTTP/HTTPS。

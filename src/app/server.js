@@ -13,6 +13,7 @@ const { Database } = require('../db/sqlite');
 const { AuthMiddleware } = require('../middleware/auth');
 const { AuthController } = require('../controllers/authController');
 const { ImageController } = require('../controllers/imageController');
+const { ImageRepository } = require('../repositories/imageRepository');
 const { AdminController } = require('../controllers/adminController');
 const { UserRepository } = require('../repositories/userRepository');
 const { TagRepository } = require('../repositories/tagRepository');
@@ -113,6 +114,7 @@ async function CreateApp() {
   const cfg = Config.Get();
   await Database.Get().Init();
   await recoverDeletions(cfg);
+  await ImageRepository.BackfillHashes();
   await cleanStaleTemps(cfg);
   await UserRepository.EnsureAdminSeed();
   sharp.cache({ memory: 16, files: 0, items: 32 });

@@ -1,11 +1,13 @@
 const { Database } = require('../db/sqlite');
 const { randomBytes } = require('node:crypto');
+const { hashImage } = require('../utils/imageHash');
+const { imagePath } = require('../utils/resources');
 
 class ImageRepository {
-  static async CreateImage({ ownerId, filename, originalName, mimeType, size, storagePath, remoteUrl, accessToken = randomBytes(16).toString('hex') }) {
+  static async CreateImage({ ownerId, filename, originalName, mimeType, size, storagePath, remoteUrl, accessToken = randomBytes(16).toString('hex'), sourceHash = null, contentHash = null }) {
     const result = await Database.Get().Run(`INSERT INTO images
-      (owner_id, filename, original_name, mime_type, size, storage_path, remote_url, access_token, created_at)
-      VALUES (?,?,?,?,?,?,?,?,?)`, [ownerId || null, filename, originalName || null, mimeType, size, storagePath, remoteUrl || null, accessToken, new Date().toISOString()]);
+      (owner_id, filename, original_name, mime_type, size, storage_path, remote_url, access_token, source_hash, content_hash, created_at)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?)`, [ownerId || null, filename, originalName || null, mimeType, size, storagePath, remoteUrl || null, accessToken, sourceHash, contentHash, new Date().toISOString()]);
     return result.lastID;
   }
 
@@ -16,6 +18,30 @@ class ImageRepository {
   static GetImageById(id) { return Database.Get().Get('SELECT * FROM images WHERE id=?', [id]); }
   static GetImageByToken(token) { return Database.Get().Get('SELECT * FROM images WHERE access_token=?', [token]); }
   static DeleteImage(id) { return Database.Get().Run('DELETE FROM images WHERE id=?', [id]); }
+
+  static async FindDuplicate(sourceHash, contentHash = sourceHash) {
+    const rows = await Database.Get().All('SELECT * FROM images WHERE source_hash IN (?,?) OR content_hash IN (?,?) ORDER BY id', [sourceHash, contentHash, sourceHash, contentHash]);
+    for (const row of rows) {
+      try { await imagePath(row); return row; }
+      catch (err) { if (err.code !== 'ENOENT') throw err; }
+    }
+  }
+
+  // 启动时分页补齐旧图库摘要；压缩前的原始字节无法从旧文件恢复。
+  static async BackfillHashes() {
+    let after = 0;
+    while (true) {
+      const rows = await Database.Get().All('SELECT * FROM images WHERE id>? AND content_hash IS NULL ORDER BY id LIMIT 256', [after]);
+      if (!rows.length) break;
+      for (const row of rows) {
+        after = row.id;
+        try {
+          const digest = await hashImage(await imagePath(row));
+          await Database.Get().Run('UPDATE images SET content_hash=? WHERE id=?', [digest, row.id]);
+        } catch (err) { if (err.code !== 'ENOENT') throw err; }
+      }
+    }
+  }
 
   // 标签反向索引先找图片编号，再按编号取有限记录。
   static Filter(tags = []) {

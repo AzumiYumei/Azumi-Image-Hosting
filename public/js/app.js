@@ -35,9 +35,10 @@ document.getElementById('logoutBtn').addEventListener('click', () => { localStor
 // 上传结果兼容两套接口，URL 单项失败时显示实际成功和失败数量。
 function uploaded(data) {
   const results = data.created || data.images || [];
-  const succeeded = results.filter(item => item.id).length;
+  const succeeded = results.filter(item => item.id && !item.duplicate).length;
+  const duplicates = results.filter(item => item.id && item.duplicate).length;
   const failed = results.filter(item => item.error);
-  showMessage(`成功上传 ${succeeded} 张图片${failed.length ? `，失败 ${failed.length} 张：${failed[0].error}` : ''}`, failed.length ? 'error' : 'success');
+  showMessage(`成功上传 ${succeeded} 张图片${duplicates ? `，跳过 ${duplicates} 张重复图片（沿用已有链接）` : ''}${failed.length ? `，失败 ${failed.length} 张：${failed[0].error}` : ''}`, failed.length ? 'error' : 'success');
 }
 
 document.getElementById('uploadBtn').addEventListener('click', async event => {

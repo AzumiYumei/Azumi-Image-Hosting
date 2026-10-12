@@ -70,6 +70,11 @@ class Database {
     // 兼容尚未添加令牌列的旧数据库，并保留现有图片链接。
     const columns = await this.All('PRAGMA table_info(images)');
     if (!columns.some(column => column.name === 'access_token')) await this.Run('ALTER TABLE images ADD COLUMN access_token TEXT');
+    // 旧记录允许重复内容，因此使用普通索引并由保存事务保证新增图片不重复。
+    for (const name of ['source_hash', 'content_hash']) {
+      if (!columns.some(column => column.name === name)) await this.Run(`ALTER TABLE images ADD COLUMN ${name} TEXT`);
+      await this.Run(`CREATE INDEX IF NOT EXISTS idx_images_${name} ON images(${name})`);
+    }
     await this.Run('CREATE UNIQUE INDEX IF NOT EXISTS idx_images_access_token ON images(access_token)');
     await this.Transaction(async () => {
       while (true) {
